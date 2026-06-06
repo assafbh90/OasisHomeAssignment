@@ -7,6 +7,8 @@ import (
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/assafbh/identityhub/internal/domain"
 )
@@ -35,6 +37,8 @@ func NewRouter(d RouterDeps) *gin.Engine {
 	// Public.
 	r.GET("/healthz", d.Health.Live)
 	r.GET("/readyz", d.Health.Ready)
+	// Interactive API docs (Swagger UI) at /swagger/index.html.
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	r.POST("/v1/auth/login", d.Auth.Login)
 
 	// Authenticated. CSRF guards cookie-authenticated unsafe methods.

@@ -153,6 +153,9 @@ drains in-flight requests for clean rolling deploys.
 
 ## REST API (for scanners / CI)
 
+Interactive docs (Swagger UI) live at **http://localhost:3000/swagger/index.html** —
+the OpenAPI spec is generated from handler annotations (`task swag` to regenerate).
+
 Issue an API key in the UI (**API keys → Manage**), then:
 
 ```bash

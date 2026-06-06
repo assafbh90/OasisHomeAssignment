@@ -31,6 +31,17 @@ func NewTokenHandler(tokens tokenSvc) *TokenHandler {
 }
 
 // Issue creates a new API key and returns the plaintext exactly once.
+//
+// @Summary  Issue an API key (plaintext shown once)
+// @Tags     api-keys
+// @Security CookieAuth
+// @Accept   json
+// @Produce  json
+// @Param    request  body      issueTokenRequest  true  "Key name, scopes, optional expiry"
+// @Success  201      {object}  issuedTokenResponse
+// @Failure  400      {object}  errorResponse
+// @Failure  401      {object}  errorResponse
+// @Router   /v1/tokens [post]
 func (h *TokenHandler) Issue(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	var req issueTokenRequest
@@ -61,6 +72,15 @@ func (h *TokenHandler) Issue(c *gin.Context) {
 }
 
 // List returns the caller's tokens (metadata only).
+//
+// @Summary  List API keys (metadata only)
+// @Tags     api-keys
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Success  200  {object}  map[string][]tokenMetaResponse
+// @Failure  401  {object}  errorResponse
+// @Router   /v1/tokens [get]
 func (h *TokenHandler) List(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	metas, err := h.tokens.ListTokens(c.Request.Context(), id)
@@ -75,6 +95,15 @@ func (h *TokenHandler) List(c *gin.Context) {
 }
 
 // Revoke revokes one of the caller's tokens.
+//
+// @Summary  Revoke an API key
+// @Tags     api-keys
+// @Security CookieAuth
+// @Security BearerAuth
+// @Param    id   path      string  true  "Token ID (UUID)"
+// @Success  204
+// @Failure  404  {object}  errorResponse
+// @Router   /v1/tokens/{id} [delete]
 func (h *TokenHandler) Revoke(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	tokenID, err := uuid.Parse(c.Param("id"))

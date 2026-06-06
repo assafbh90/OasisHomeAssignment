@@ -69,6 +69,14 @@ func ValidateProvider() gin.HandlerFunc {
 }
 
 // ListIntegrations returns connection info for each provider (just Jira here).
+//
+// @Summary  List integrations (connection status)
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Success  200  {object}  map[string][]connectionResponse
+// @Router   /v1/integrations [get]
 func (h *IntegrationHandler) ListIntegrations(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	info, err := h.conn.DescribeConnection(c.Request.Context(), id)
@@ -80,6 +88,15 @@ func (h *IntegrationHandler) ListIntegrations(c *gin.Context) {
 }
 
 // Connect starts the OAuth authorization and returns the provider auth URL.
+//
+// @Summary  Start Jira OAuth (returns the consent URL)
+// @Tags     integrations
+// @Security CookieAuth
+// @Produce  json
+// @Param    provider  path      string  true  "Provider"  default(jira)
+// @Success  200       {object}  authURLResponse
+// @Failure  401       {object}  errorResponse
+// @Router   /v1/integrations/{provider}/connect [get]
 func (h *IntegrationHandler) Connect(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	url, err := h.conn.StartAuthorization(c.Request.Context(), id)
@@ -91,6 +108,15 @@ func (h *IntegrationHandler) Connect(c *gin.Context) {
 }
 
 // Callback completes the OAuth flow and redirects the browser back to the SPA.
+//
+// @Summary  Jira OAuth callback (redirects to the SPA)
+// @Tags     integrations
+// @Security CookieAuth
+// @Param    provider  path   string  true  "Provider"  default(jira)
+// @Param    state     query  string  true  "OAuth state"
+// @Param    code      query  string  true  "Authorization code"
+// @Success  302
+// @Router   /v1/integrations/{provider}/callback [get]
 func (h *IntegrationHandler) Callback(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	state := c.Query("state")
@@ -111,6 +137,15 @@ func (h *IntegrationHandler) Callback(c *gin.Context) {
 
 // Reconcile forces a refresh of the tenant's ticket cache from Jira (the refresh
 // button). It is single-flighted by the gate; reauth needs surface as 409.
+//
+// @Summary  Reconcile the ticket cache from Jira (drift refresh)
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Param    provider  path  string  true  "Provider"  default(jira)
+// @Success  204
+// @Failure  409  {object}  errorResponse  "reauth_required"
+// @Router   /v1/integrations/{provider}/reconcile [post]
 func (h *IntegrationHandler) Reconcile(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	if err := h.reports.Reconcile(c.Request.Context(), id, true); err != nil {
@@ -134,6 +169,15 @@ func (h *IntegrationHandler) reconcileAsync(reqCtx context.Context, id domain.Id
 }
 
 // Status describes the current connection.
+//
+// @Summary  Connection status
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Param    provider  path      string  true  "Provider"  default(jira)
+// @Success  200       {object}  connectionResponse
+// @Router   /v1/integrations/{provider}/status [get]
 func (h *IntegrationHandler) Status(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	info, err := h.conn.DescribeConnection(c.Request.Context(), id)
@@ -145,6 +189,15 @@ func (h *IntegrationHandler) Status(c *gin.Context) {
 }
 
 // Disconnect removes the connection.
+//
+// @Summary  Disconnect the integration
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Param    provider  path  string  true  "Provider"  default(jira)
+// @Success  204
+// @Failure  403  {object}  errorResponse
+// @Router   /v1/integrations/{provider} [delete]
 func (h *IntegrationHandler) Disconnect(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	if err := h.conn.DisconnectIntegration(c.Request.Context(), id); err != nil {
@@ -155,6 +208,16 @@ func (h *IntegrationHandler) Disconnect(c *gin.Context) {
 }
 
 // ListProjects returns the user's Jira projects (for the project picker).
+//
+// @Summary  List Jira projects (project picker)
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Param    provider  path      string  true  "Provider"  default(jira)
+// @Success  200       {object}  map[string][]projectResponse
+// @Failure  409       {object}  errorResponse  "reauth_required"
+// @Router   /v1/integrations/{provider}/projects [get]
 func (h *IntegrationHandler) ListProjects(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	projects, err := h.reports.ListProjects(c.Request.Context(), id)
@@ -169,6 +232,20 @@ func (h *IntegrationHandler) ListProjects(c *gin.Context) {
 }
 
 // CreateTicket creates an NHI finding ticket (UI session or REST API key).
+//
+// @Summary  Create an NHI finding ticket (tagged identityhub)
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Accept   json
+// @Produce  json
+// @Param    provider  path      string         true  "Provider"  default(jira)
+// @Param    ticket    body      ticketRequest  true  "Finding"
+// @Success  201       {object}  ticketResponse
+// @Failure  400       {object}  errorResponse
+// @Failure  403       {object}  errorResponse
+// @Failure  409       {object}  errorResponse  "reauth_required"
+// @Router   /v1/integrations/{provider}/tickets [post]
 func (h *IntegrationHandler) CreateTicket(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	var req ticketRequest
@@ -195,6 +272,17 @@ func (h *IntegrationHandler) CreateTicket(c *gin.Context) {
 }
 
 // ListRecentTickets returns the 10 most recent app-created tickets for a project.
+//
+// @Summary  Recent IdentityHub tickets (cached)
+// @Tags     integrations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Param    provider  path      string  true  "Provider"  default(jira)
+// @Param    project   query     string  true  "Project key"
+// @Success  200       {object}  map[string][]recentTicketResponse
+// @Failure  400       {object}  errorResponse
+// @Router   /v1/integrations/{provider}/tickets [get]
 func (h *IntegrationHandler) ListRecentTickets(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	project := strings.TrimSpace(c.Query("project"))

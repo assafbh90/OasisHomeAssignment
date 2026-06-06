@@ -1,0 +1,592 @@
+basePath: /
+definitions:
+  internal_transport_http.authURLResponse:
+    properties:
+      auth_url:
+        type: string
+    type: object
+  internal_transport_http.connectionResponse:
+    properties:
+      connected:
+        type: boolean
+      provider:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+    type: object
+  internal_transport_http.errorResponse:
+    properties:
+      error:
+        type: string
+      message:
+        type: string
+    type: object
+  internal_transport_http.identityResponse:
+    properties:
+      auth_method:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      tenant_id:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_transport_http.issueTokenRequest:
+    properties:
+      expires_at:
+        type: string
+      name:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_transport_http.issuedTokenResponse:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      prefix:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      token:
+        description: plaintext, shown once
+        type: string
+    type: object
+  internal_transport_http.loginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  internal_transport_http.loginResponse:
+    properties:
+      auth_method:
+        type: string
+      csrf_token:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      tenant_id:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_transport_http.projectResponse:
+    properties:
+      key:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_transport_http.recentTicketResponse:
+    properties:
+      created_at:
+        type: string
+      issue_key:
+        type: string
+      project_key:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_transport_http.ticketRequest:
+    properties:
+      description:
+        type: string
+      labels:
+        items:
+          type: string
+        type: array
+      project_key:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_transport_http.ticketResponse:
+    properties:
+      issue_key:
+        type: string
+      provider:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_transport_http.tokenMetaResponse:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      prefix:
+        type: string
+      revoked_at:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+    type: object
+info:
+  contact: {}
+  description: |-
+    Multi-tenant API to connect a Jira Cloud workspace (OAuth 3LO)
+    and file NHI finding tickets — from the UI and from a REST API
+    guarded by a machine API key.
+  title: IdentityHub API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Liveness probe
+      tags:
+      - ops
+  /readyz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Readiness probe (Postgres + Redis)
+      tags:
+      - ops
+  /v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Email and password
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http.loginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http.loginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      summary: Log in (email + password)
+      tags:
+      - auth
+  /v1/auth/logout:
+    post:
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      summary: Log out (revoke session)
+      tags:
+      - auth
+  /v1/auth/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http.identityResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Current identity
+      tags:
+      - auth
+  /v1/integrations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/internal_transport_http.connectionResponse'
+              type: array
+            type: object
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: List integrations (connection status)
+      tags:
+      - integrations
+  /v1/integrations/{provider}:
+    delete:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Disconnect the integration
+      tags:
+      - integrations
+  /v1/integrations/{provider}/callback:
+    get:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: OAuth state
+        in: query
+        name: state
+        required: true
+        type: string
+      - description: Authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      responses:
+        "302":
+          description: Found
+      security:
+      - CookieAuth: []
+      summary: Jira OAuth callback (redirects to the SPA)
+      tags:
+      - integrations
+  /v1/integrations/{provider}/connect:
+    get:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http.authURLResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      summary: Start Jira OAuth (returns the consent URL)
+      tags:
+      - integrations
+  /v1/integrations/{provider}/projects:
+    get:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/internal_transport_http.projectResponse'
+              type: array
+            type: object
+        "409":
+          description: reauth_required
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: List Jira projects (project picker)
+      tags:
+      - integrations
+  /v1/integrations/{provider}/reconcile:
+    post:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "409":
+          description: reauth_required
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Reconcile the ticket cache from Jira (drift refresh)
+      tags:
+      - integrations
+  /v1/integrations/{provider}/status:
+    get:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_transport_http.connectionResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Connection status
+      tags:
+      - integrations
+  /v1/integrations/{provider}/tickets:
+    get:
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Project key
+        in: query
+        name: project
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/internal_transport_http.recentTicketResponse'
+              type: array
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Recent IdentityHub tickets (cached)
+      tags:
+      - integrations
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - default: jira
+        description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Finding
+        in: body
+        name: ticket
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http.ticketRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_transport_http.ticketResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+        "409":
+          description: reauth_required
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Create an NHI finding ticket (tagged identityhub)
+      tags:
+      - integrations
+  /v1/tokens:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/internal_transport_http.tokenMetaResponse'
+              type: array
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: List API keys (metadata only)
+      tags:
+      - api-keys
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Key name, scopes, optional expiry
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_transport_http.issueTokenRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_transport_http.issuedTokenResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      summary: Issue an API key (plaintext shown once)
+      tags:
+      - api-keys
+  /v1/tokens/{id}:
+    delete:
+      parameters:
+      - description: Token ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_transport_http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Revoke an API key
+      tags:
+      - api-keys
+securityDefinitions:
+  BearerAuth:
+    description: Machine API key as "Bearer ih_pat_…" (issue one via POST /v1/tokens).
+    in: header
+    name: Authorization
+    type: apiKey
+  CookieAuth:
+    description: Interactive session cookie (set by POST /v1/auth/login).
+    in: cookie
+    name: ih_session
+    type: apiKey
+swagger: "2.0"

@@ -48,6 +48,17 @@ type loginResponse struct {
 }
 
 // Login verifies credentials, creates a session, and sets cookies.
+//
+// @Summary  Log in (email + password)
+// @Tags     auth
+// @Accept   json
+// @Produce  json
+// @Param    credentials  body      loginRequest  true  "Email and password"
+// @Success  200          {object}  loginResponse
+// @Failure  400          {object}  errorResponse
+// @Failure  401          {object}  errorResponse
+// @Failure  429          {object}  errorResponse
+// @Router   /v1/auth/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := bindJSON(c, &req); err != nil {
@@ -89,6 +100,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 }
 
 // Logout revokes the current session and clears cookies.
+//
+// @Summary  Log out (revoke session)
+// @Tags     auth
+// @Security CookieAuth
+// @Success  204
+// @Failure  401  {object}  errorResponse
+// @Router   /v1/auth/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
 	ctx := c.Request.Context()
 	if cookie, err := c.Request.Cookie(h.cookie.SessionName); err == nil && cookie.Value != "" {
@@ -103,6 +121,15 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 }
 
 // Me returns the current identity.
+//
+// @Summary  Current identity
+// @Tags     auth
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Success  200  {object}  identityResponse
+// @Failure  401  {object}  errorResponse
+// @Router   /v1/auth/me [get]
 func (h *AuthHandler) Me(c *gin.Context) {
 	id, ok := mustIdentity(c)
 	if !ok {

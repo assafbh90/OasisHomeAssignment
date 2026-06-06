@@ -26,6 +26,13 @@ tasks:
     cmds:
       - go -C {{.BACKEND}} build -o bin/api ./cmd/api
 
+  swag:
+    desc: Regenerate the OpenAPI spec from handler annotations (Swagger UI at /swagger)
+    dir: "{{.BACKEND}}"
+    cmds:
+      - go install github.com/swaggo/swag/cmd/swag@latest
+      - '"$(go env GOPATH)/bin/swag" init -g cmd/api/main.go -o docs --parseInternal --parseDependency'
+
   run:
     desc: Run the backend API locally (expects postgres+redis up via `task infra`)
     cmds:
