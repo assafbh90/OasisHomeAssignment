@@ -39,8 +39,8 @@ export function App() {
           <span className="tag">NHI Findings</span>
         </div>
         <nav className="row gap">
-          <a className="link" href="/swagger/index.html" target="_blank" rel="noreferrer">
-            API docs ↗
+          <a className="link" href="/api_docs/index.html" target="_blank" rel="noreferrer">
+            /api_docs ↗
           </a>
           {identity && (
             <button className="link" onClick={logout}>

@@ -31,10 +31,10 @@ tasks:
     dir: "{{.BACKEND}}"
     cmds:
       - go install github.com/swaggo/swag/cmd/swag@latest
-      # -d points at the dirs with Go files (general info + handlers) to avoid
-      # "no Go files" warnings; no --parseDependency (we reference no third-party
-      # types in annotations, and it would noisily walk the Go runtime).
-      - '"$(go env GOPATH)/bin/swag" init -g cmd/api/main.go -d cmd/api,internal/transport/http -o docs --parseInternal'
+      # -g is a bare filename resolved within the -d dirs (general info in cmd/api,
+      # handler annotations in transport/http); no --parseDependency (we reference
+      # no third-party types in annotations, and it would noisily walk the runtime).
+      - '"$(go env GOPATH)/bin/swag" init -g main.go -d cmd/api,internal/transport/http -o docs --parseInternal'
 
   run:
     desc: Run the backend API locally (expects postgres+redis up via `task infra`)

@@ -70,6 +70,17 @@ input, select, textarea {
 textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
+/* Keep browser autofill (e.g. saved passwords) on the dark theme instead of the
+   forced light background Chrome applies on focus. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset;
+  caret-color: var(--text);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 button {
   cursor: pointer;
   font-size: 14px;

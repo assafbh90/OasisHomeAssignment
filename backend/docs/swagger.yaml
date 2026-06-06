@@ -1,11 +1,6 @@
 basePath: /
 definitions:
-  internal_transport_http.authURLResponse:
-    properties:
-      auth_url:
-        type: string
-    type: object
-  internal_transport_http.connectionResponse:
+  http.connectionResponse:
     properties:
       connected:
         type: boolean
@@ -18,14 +13,14 @@ definitions:
       status:
         type: string
     type: object
-  internal_transport_http.errorResponse:
+  http.errorResponse:
     properties:
       error:
         type: string
       message:
         type: string
     type: object
-  internal_transport_http.identityResponse:
+  http.identityResponse:
     properties:
       auth_method:
         type: string
@@ -38,7 +33,7 @@ definitions:
       user_id:
         type: string
     type: object
-  internal_transport_http.issueTokenRequest:
+  http.issueTokenRequest:
     properties:
       expires_at:
         type: string
@@ -49,7 +44,7 @@ definitions:
           type: string
         type: array
     type: object
-  internal_transport_http.issuedTokenResponse:
+  http.issuedTokenResponse:
     properties:
       created_at:
         type: string
@@ -69,36 +64,14 @@ definitions:
         description: plaintext, shown once
         type: string
     type: object
-  internal_transport_http.loginRequest:
-    properties:
-      email:
-        type: string
-      password:
-        type: string
-    type: object
-  internal_transport_http.loginResponse:
-    properties:
-      auth_method:
-        type: string
-      csrf_token:
-        type: string
-      scopes:
-        items:
-          type: string
-        type: array
-      tenant_id:
-        type: string
-      user_id:
-        type: string
-    type: object
-  internal_transport_http.projectResponse:
+  http.projectResponse:
     properties:
       key:
         type: string
       name:
         type: string
     type: object
-  internal_transport_http.recentTicketResponse:
+  http.recentTicketResponse:
     properties:
       created_at:
         type: string
@@ -111,7 +84,7 @@ definitions:
       url:
         type: string
     type: object
-  internal_transport_http.ticketRequest:
+  http.ticketRequest:
     properties:
       description:
         type: string
@@ -124,7 +97,7 @@ definitions:
       title:
         type: string
     type: object
-  internal_transport_http.ticketResponse:
+  http.ticketResponse:
     properties:
       issue_key:
         type: string
@@ -133,7 +106,7 @@ definitions:
       url:
         type: string
     type: object
-  internal_transport_http.tokenMetaResponse:
+  http.tokenMetaResponse:
     properties:
       created_at:
         type: string
@@ -195,53 +168,6 @@ paths:
       summary: Readiness probe (Postgres + Redis)
       tags:
       - ops
-  /v1/auth/login:
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: Email and password
-        in: body
-        name: credentials
-        required: true
-        schema:
-          $ref: '#/definitions/internal_transport_http.loginRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_transport_http.loginResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
-        "429":
-          description: Too Many Requests
-          schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
-      summary: Log in (email + password)
-      tags:
-      - auth
-  /v1/auth/logout:
-    post:
-      responses:
-        "204":
-          description: No Content
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
-      security:
-      - CookieAuth: []
-      summary: Log out (revoke session)
-      tags:
-      - auth
   /v1/auth/me:
     get:
       produces:
@@ -250,11 +176,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_transport_http.identityResponse'
+            $ref: '#/definitions/http.identityResponse'
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -271,7 +197,7 @@ paths:
           schema:
             additionalProperties:
               items:
-                $ref: '#/definitions/internal_transport_http.connectionResponse'
+                $ref: '#/definitions/http.connectionResponse'
               type: array
             type: object
       security:
@@ -295,63 +221,11 @@ paths:
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
       summary: Disconnect the integration
-      tags:
-      - integrations
-  /v1/integrations/{provider}/callback:
-    get:
-      parameters:
-      - default: jira
-        description: Provider
-        in: path
-        name: provider
-        required: true
-        type: string
-      - description: OAuth state
-        in: query
-        name: state
-        required: true
-        type: string
-      - description: Authorization code
-        in: query
-        name: code
-        required: true
-        type: string
-      responses:
-        "302":
-          description: Found
-      security:
-      - CookieAuth: []
-      summary: Jira OAuth callback (redirects to the SPA)
-      tags:
-      - integrations
-  /v1/integrations/{provider}/connect:
-    get:
-      parameters:
-      - default: jira
-        description: Provider
-        in: path
-        name: provider
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_transport_http.authURLResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
-      security:
-      - CookieAuth: []
-      summary: Start Jira OAuth (returns the consent URL)
       tags:
       - integrations
   /v1/integrations/{provider}/projects:
@@ -371,13 +245,13 @@ paths:
           schema:
             additionalProperties:
               items:
-                $ref: '#/definitions/internal_transport_http.projectResponse'
+                $ref: '#/definitions/http.projectResponse'
               type: array
             type: object
         "409":
           description: reauth_required
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -399,7 +273,7 @@ paths:
         "409":
           description: reauth_required
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -421,7 +295,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_transport_http.connectionResponse'
+            $ref: '#/definitions/http.connectionResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -450,13 +324,13 @@ paths:
           schema:
             additionalProperties:
               items:
-                $ref: '#/definitions/internal_transport_http.recentTicketResponse'
+                $ref: '#/definitions/http.recentTicketResponse'
               type: array
             type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -478,26 +352,26 @@ paths:
         name: ticket
         required: true
         schema:
-          $ref: '#/definitions/internal_transport_http.ticketRequest'
+          $ref: '#/definitions/http.ticketRequest'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/internal_transport_http.ticketResponse'
+            $ref: '#/definitions/http.ticketResponse'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
         "409":
           description: reauth_required
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -514,13 +388,13 @@ paths:
           schema:
             additionalProperties:
               items:
-                $ref: '#/definitions/internal_transport_http.tokenMetaResponse'
+                $ref: '#/definitions/http.tokenMetaResponse'
               type: array
             type: object
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []
@@ -536,22 +410,22 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_transport_http.issueTokenRequest'
+          $ref: '#/definitions/http.issueTokenRequest'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/internal_transport_http.issuedTokenResponse'
+            $ref: '#/definitions/http.issuedTokenResponse'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       summary: Issue an API key (plaintext shown once)
@@ -571,7 +445,7 @@ paths:
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/internal_transport_http.errorResponse'
+            $ref: '#/definitions/http.errorResponse'
       security:
       - CookieAuth: []
       - BearerAuth: []

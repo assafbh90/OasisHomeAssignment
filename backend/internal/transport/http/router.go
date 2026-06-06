@@ -37,8 +37,8 @@ func NewRouter(d RouterDeps) *gin.Engine {
 	// Public.
 	r.GET("/healthz", d.Health.Live)
 	r.GET("/readyz", d.Health.Ready)
-	// Interactive API docs (Swagger UI) at /swagger/index.html.
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Interactive API docs (Swagger UI) at /api_docs/index.html.
+	r.GET("/api_docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/api_docs/doc.json")))
 	r.POST("/v1/auth/login", d.Auth.Login)
 
 	// Authenticated. CSRF guards cookie-authenticated unsafe methods.

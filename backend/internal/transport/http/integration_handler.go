@@ -88,15 +88,7 @@ func (h *IntegrationHandler) ListIntegrations(c *gin.Context) {
 }
 
 // Connect starts the OAuth authorization and returns the provider auth URL.
-//
-// @Summary  Start Jira OAuth (returns the consent URL)
-// @Tags     integrations
-// @Security CookieAuth
-// @Produce  json
-// @Param    provider  path      string  true  "Provider"  default(jira)
-// @Success  200       {object}  authURLResponse
-// @Failure  401       {object}  errorResponse
-// @Router   /v1/integrations/{provider}/connect [get]
+// Browser/session flow — not part of the public API docs.
 func (h *IntegrationHandler) Connect(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	url, err := h.conn.StartAuthorization(c.Request.Context(), id)
@@ -108,15 +100,7 @@ func (h *IntegrationHandler) Connect(c *gin.Context) {
 }
 
 // Callback completes the OAuth flow and redirects the browser back to the SPA.
-//
-// @Summary  Jira OAuth callback (redirects to the SPA)
-// @Tags     integrations
-// @Security CookieAuth
-// @Param    provider  path   string  true  "Provider"  default(jira)
-// @Param    state     query  string  true  "OAuth state"
-// @Param    code      query  string  true  "Authorization code"
-// @Success  302
-// @Router   /v1/integrations/{provider}/callback [get]
+// Browser redirect flow — not part of the public API docs.
 func (h *IntegrationHandler) Callback(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	state := c.Query("state")

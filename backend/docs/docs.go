@@ -64,81 +64,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/v1/auth/login": {
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "Log in (email + password)",
-                "parameters": [
-                    {
-                        "description": "Email and password",
-                        "name": "credentials",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.loginRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.loginResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
-                        }
-                    },
-                    "429": {
-                        "description": "Too Many Requests",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/v1/auth/logout": {
-            "post": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "Log out (revoke session)",
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/v1/auth/me": {
             "get": {
                 "security": [
@@ -160,13 +85,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.identityResponse"
+                            "$ref": "#/definitions/http.identityResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -197,7 +122,7 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "array",
                                 "items": {
-                                    "$ref": "#/definitions/internal_transport_http.connectionResponse"
+                                    "$ref": "#/definitions/http.connectionResponse"
                                 }
                             }
                         }
@@ -236,89 +161,7 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/v1/integrations/{provider}/callback": {
-            "get": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "tags": [
-                    "integrations"
-                ],
-                "summary": "Jira OAuth callback (redirects to the SPA)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "default": "jira",
-                        "description": "Provider",
-                        "name": "provider",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "OAuth state",
-                        "name": "state",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Authorization code",
-                        "name": "code",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "302": {
-                        "description": "Found"
-                    }
-                }
-            }
-        },
-        "/v1/integrations/{provider}/connect": {
-            "get": {
-                "security": [
-                    {
-                        "CookieAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "integrations"
-                ],
-                "summary": "Start Jira OAuth (returns the consent URL)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "default": "jira",
-                        "description": "Provider",
-                        "name": "provider",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.authURLResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -359,7 +202,7 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "array",
                                 "items": {
-                                    "$ref": "#/definitions/internal_transport_http.projectResponse"
+                                    "$ref": "#/definitions/http.projectResponse"
                                 }
                             }
                         }
@@ -367,7 +210,7 @@ const docTemplate = `{
                     "409": {
                         "description": "reauth_required",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -404,7 +247,7 @@ const docTemplate = `{
                     "409": {
                         "description": "reauth_required",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -441,7 +284,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.connectionResponse"
+                            "$ref": "#/definitions/http.connectionResponse"
                         }
                     }
                 }
@@ -489,7 +332,7 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "array",
                                 "items": {
-                                    "$ref": "#/definitions/internal_transport_http.recentTicketResponse"
+                                    "$ref": "#/definitions/http.recentTicketResponse"
                                 }
                             }
                         }
@@ -497,7 +340,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -536,7 +379,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.ticketRequest"
+                            "$ref": "#/definitions/http.ticketRequest"
                         }
                     }
                 ],
@@ -544,25 +387,25 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.ticketResponse"
+                            "$ref": "#/definitions/http.ticketResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     },
                     "409": {
                         "description": "reauth_required",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -593,7 +436,7 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "array",
                                 "items": {
-                                    "$ref": "#/definitions/internal_transport_http.tokenMetaResponse"
+                                    "$ref": "#/definitions/http.tokenMetaResponse"
                                 }
                             }
                         }
@@ -601,7 +444,7 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -629,7 +472,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.issueTokenRequest"
+                            "$ref": "#/definitions/http.issueTokenRequest"
                         }
                     }
                 ],
@@ -637,19 +480,19 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.issuedTokenResponse"
+                            "$ref": "#/definitions/http.issuedTokenResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -685,7 +528,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/internal_transport_http.errorResponse"
+                            "$ref": "#/definitions/http.errorResponse"
                         }
                     }
                 }
@@ -693,15 +536,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "internal_transport_http.authURLResponse": {
-            "type": "object",
-            "properties": {
-                "auth_url": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_transport_http.connectionResponse": {
+        "http.connectionResponse": {
             "type": "object",
             "properties": {
                 "connected": {
@@ -721,7 +556,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.errorResponse": {
+        "http.errorResponse": {
             "type": "object",
             "properties": {
                 "error": {
@@ -732,7 +567,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.identityResponse": {
+        "http.identityResponse": {
             "type": "object",
             "properties": {
                 "auth_method": {
@@ -752,7 +587,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.issueTokenRequest": {
+        "http.issueTokenRequest": {
             "type": "object",
             "properties": {
                 "expires_at": {
@@ -769,7 +604,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.issuedTokenResponse": {
+        "http.issuedTokenResponse": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -799,41 +634,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.loginRequest": {
-            "type": "object",
-            "properties": {
-                "email": {
-                    "type": "string"
-                },
-                "password": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_transport_http.loginResponse": {
-            "type": "object",
-            "properties": {
-                "auth_method": {
-                    "type": "string"
-                },
-                "csrf_token": {
-                    "type": "string"
-                },
-                "scopes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "tenant_id": {
-                    "type": "string"
-                },
-                "user_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_transport_http.projectResponse": {
+        "http.projectResponse": {
             "type": "object",
             "properties": {
                 "key": {
@@ -844,7 +645,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.recentTicketResponse": {
+        "http.recentTicketResponse": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -864,7 +665,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.ticketRequest": {
+        "http.ticketRequest": {
             "type": "object",
             "properties": {
                 "description": {
@@ -884,7 +685,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.ticketResponse": {
+        "http.ticketResponse": {
             "type": "object",
             "properties": {
                 "issue_key": {
@@ -898,7 +699,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_transport_http.tokenMetaResponse": {
+        "http.tokenMetaResponse": {
             "type": "object",
             "properties": {
                 "created_at": {

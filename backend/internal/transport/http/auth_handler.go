@@ -47,18 +47,9 @@ type loginResponse struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
-// Login verifies credentials, creates a session, and sets cookies.
-//
-// @Summary  Log in (email + password)
-// @Tags     auth
-// @Accept   json
-// @Produce  json
-// @Param    credentials  body      loginRequest  true  "Email and password"
-// @Success  200          {object}  loginResponse
-// @Failure  400          {object}  errorResponse
-// @Failure  401          {object}  errorResponse
-// @Failure  429          {object}  errorResponse
-// @Router   /v1/auth/login [post]
+// Login verifies credentials, creates a session, and sets cookies. It is a
+// browser/session flow used by the SPA, so it's intentionally not in the public
+// API docs (which cover the machine API consumed with a Bearer key).
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := bindJSON(c, &req); err != nil {
@@ -99,14 +90,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, loginResponse{identityResponse: toIdentityResponse(id), CSRFToken: csrf})
 }
 
-// Logout revokes the current session and clears cookies.
-//
-// @Summary  Log out (revoke session)
-// @Tags     auth
-// @Security CookieAuth
-// @Success  204
-// @Failure  401  {object}  errorResponse
-// @Router   /v1/auth/logout [post]
+// Logout revokes the current session and clears cookies. Session/cookie flow —
+// not part of the public API docs.
 func (h *AuthHandler) Logout(c *gin.Context) {
 	ctx := c.Request.Context()
 	if cookie, err := c.Request.Cookie(h.cookie.SessionName); err == nil && cookie.Value != "" {
