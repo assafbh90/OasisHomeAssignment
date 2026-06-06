@@ -1,0 +1,102 @@
+# go-task (https://taskfile.dev) — the single entrypoint for all local operations.
+# Install: `go install github.com/go-task/task/v3/cmd/task@latest` or `brew install go-task`.
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  BACKEND: "{{.TASKFILE_DIR}}/backend"
+  MIGRATIONS: "{{.TASKFILE_DIR}}/backend/migrations"
+  # Migrations run as the superuser (they create roles/functions and bypass RLS).
+  PG_DSN: "postgres://{{.PG_SUPERUSER}}:{{.PG_SUPERUSER_PASSWORD}}@localhost:{{.POSTGRES_PORT}}/{{.PG_DB}}?sslmode={{.POSTGRES_SSLMODE}}"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go -C {{.BACKEND}} mod tidy
+
+  build:
+    desc: Build the backend binary
+    cmds:
+      - go -C {{.BACKEND}} build -o bin/api ./cmd/api
+
+  run:
+    desc: Run the backend API locally (expects postgres+redis up via `task infra`)
+    cmds:
+      - go -C {{.BACKEND}} run ./cmd/api
+
+  lint:install:
+    desc: Install golangci-lint built with the local Go toolchain (into $GOPATH/bin)
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    status:
+      # Skip if a toolchain-matched binary already exists.
+      - test -x "$(go env GOPATH)/bin/golangci-lint"
+
+  lint:
+    desc: Run all configured linters (auto-installs a toolchain-matched golangci-lint)
+    deps: [lint:install]
+    dir: "{{.BACKEND}}"
+    cmds:
+      # Use the $GOPATH/bin build (compiled with the local Go), not any older
+      # system binary on PATH that may not support this module's Go version.
+      - '"$(go env GOPATH)/bin/golangci-lint" run ./...'
+
+  fmt:
+    desc: gofmt + go vet
+    cmds:
+      - gofmt -l -w {{.BACKEND}}
+      - go -C {{.BACKEND}} vet ./...
+
+  test:
+    desc: Run unit tests with the race detector
+    cmds:
+      - go -C {{.BACKEND}} test -race -short ./...
+
+  test-integration:
+    desc: Run integration tests (testcontainers — needs Docker)
+    cmds:
+      - go -C {{.BACKEND}} test -tags=integration ./test/integration/...
+
+  cover:
+    desc: Combined unit+integration statement coverage across all packages (needs Docker)
+    cmds:
+      - go -C {{.BACKEND}} test -tags=integration -coverpkg=./... -coverprofile=coverage.out ./...
+      - go -C {{.BACKEND}} tool cover -func=coverage.out | tail -1
+      - 'echo "HTML report: go -C backend tool cover -html=coverage.out"'
+
+  migrate:
+    desc: Apply DB migrations against a running Postgres (uses .env)
+    cmds:
+      - migrate -path {{.MIGRATIONS}} -database "{{.PG_DSN}}" up
+
+  migrate-down:
+    desc: Roll back the last DB migration
+    cmds:
+      - migrate -path {{.MIGRATIONS}} -database "{{.PG_DSN}}" down 1
+
+  infra:
+    desc: Start only postgres + redis (for local non-docker backend dev)
+    cmds:
+      - docker compose up -d postgres redis
+
+  up:
+    desc: Build and start the full stack (frontend + backend + postgres + redis + migrate)
+    cmds:
+      - docker compose up --build {{.CLI_ARGS}}
+
+  down:
+    desc: Stop the stack and remove volumes
+    cmds:
+      - docker compose down -v
+
+  logs:
+    desc: Tail compose logs
+    cmds:
+      - docker compose logs -f {{.CLI_ARGS}}

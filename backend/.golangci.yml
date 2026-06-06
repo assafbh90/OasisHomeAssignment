@@ -1,0 +1,132 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # Starts from the standard set (errcheck, govet, ineffassign, staticcheck,
+  # unused) and adds a curated high-signal set. Grouped by purpose below.
+  enable:
+    # --- bugs / correctness ---
+    - bodyclose          # HTTP response bodies are closed
+    - rowserrcheck       # sql/pgx rows.Err() is checked
+    - sqlclosecheck      # sql rows/stmts are closed
+    - noctx              # no HTTP requests without a context
+    - nilerr             # don't return nil on a non-nil error
+    - errorlint          # correct error wrapping/comparison (errors.Is/As)
+    - errname            # error vars are Err*, error types are *Error
+    - durationcheck      # no accidental time.Duration multiplications
+    - makezero           # no append to a non-zero-length make slice
+    - reassign           # don't reassign top-level vars from other packages
+    - gocheckcompilerdirectives # //go: directives are well-formed
+    - bidichk            # no dangerous bidi/unicode in source
+    - exhaustive         # enum switches are exhaustive (default counts)
+    - copyloopvar        # no needless loop-var copies (Go 1.22+ semantics)
+    # --- security ---
+    - gosec
+    # --- style / quality ---
+    - revive
+    - gocritic
+    - gocyclo            # cap cyclomatic complexity (readability)
+    - mnd                # flag unnamed "magic" numbers
+    - unconvert
+    - unparam            # no unused function parameters/returns
+    - wastedassign
+    - usestdlibvars      # use http.MethodGet, status consts, etc.
+    - misspell
+    - whitespace
+    - predeclared        # don't shadow predeclared identifiers
+    - prealloc           # preallocate slices in loops where clear
+    - nolintlint         # //nolint directives are specific and justified
+    # --- tests ---
+    - testifylint        # idiomatic testify usage
+    - tparallel          # correct t.Parallel usage
+    - thelper            # test helpers call t.Helper()
+    # --- architecture ---
+    - depguard           # enforce dependency boundaries (domain purity)
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        - G115 # int conversion overflow — noisy with uuid/time math
+        - G202 # SQL string concatenation — we only concatenate CONSTANT column
+               # lists; every value is a $N parameter (no user input in SQL).
+        - G101 # "hardcoded credentials" — false positives on identifiers that
+               # contain key/token/credential as domain words (config keys,
+               # column lists). Real secrets come only from env/viper.
+        - G124 # cookie attributes are deliberate and config-driven: Secure is
+               # toggled by config (true behind TLS), and the CSRF cookie is
+               # intentionally non-HttpOnly for the double-submit pattern.
+    exhaustive:
+      # A `default:` case makes a switch exhaustive (we use default-deny patterns).
+      default-signifies-exhaustive: true
+    gocyclo:
+      min-complexity: 18
+    mnd:
+      # 0/1/2 and the like are ignored by default. Don't flag time units or the
+      # standard HTTP-port-ish constants used in setup code.
+      ignored-functions:
+        - ^make$
+        - time\.
+        - strconv\.
+    revive:
+      rules:
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: errorf
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+    depguard:
+      rules:
+        domain-purity:
+          # The pure domain must not depend on transport/storage/config infra.
+          files:
+            - "**/internal/domain/**"
+          deny:
+            - pkg: github.com/gin-gonic/gin
+              desc: domain must stay framework-free
+            - pkg: github.com/jackc/pgx
+              desc: domain must not depend on storage
+            - pkg: github.com/redis/go-redis
+              desc: domain must not depend on storage
+            - pkg: github.com/spf13/viper
+              desc: domain must not depend on config infra
+            - pkg: net/http
+              desc: domain must not depend on transport
+
+  exclusions:
+    rules:
+      # Test files are looser: fakes have unused params, assertions allocate, etc.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - unparam
+          - gocritic
+          - prealloc
+          - noctx # httptest.NewRequest is fine in tests
+          - mnd   # literal values are expected in tests
+          - gocyclo
+
+formatters:
+  enable:
+    - gofumpt   # stricter superset of gofmt
+    - gci       # deterministic import grouping
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
