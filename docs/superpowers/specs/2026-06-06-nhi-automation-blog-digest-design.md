@@ -160,7 +160,7 @@ from `Identity`):
 | `GET /v1/automations` | list (tenant-wide) |
 | `POST /v1/automations` | create |
 | `GET /v1/automations/{id}` | get |
-| `PATCH /v1/automations/{id}` | update (name/url/project/interval/enabled) |
+| `PUT /v1/automations/{id}` | update — full replacement (name/url/project/interval/enabled) |
 | `DELETE /v1/automations/{id}` | delete (also clears the Redis seen-set) |
 | `POST /v1/automations/{id}/run` | "run now" (set `next_scan_at = now()`) |
 
