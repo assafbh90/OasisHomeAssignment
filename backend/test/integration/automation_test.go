@@ -136,7 +136,8 @@ func TestAutomation_EndToEnd(t *testing.T) {
 		Paragraph of meaningful body content long enough for extraction.</p></article></body></html>`))
 	})
 	mux.HandleFunc("/api/generate", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"response":"A short summary."}`))
+		// The model emits a JSON object (we request format=json).
+		_, _ = w.Write([]byte(`{"response":"{\"title\":\"Post One\",\"source\":\"Test Blog\",\"type\":\"blog\",\"summary\":\"A short summary.\"}"}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -163,8 +164,9 @@ func TestAutomation_EndToEnd(t *testing.T) {
 	// First run files exactly one ticket.
 	require.NoError(t, svc.RunOnce(ctx, a))
 	require.Len(t, tickets.created, 1)
-	require.Equal(t, "Post One", tickets.created[0].Title)
+	require.Equal(t, "Test Blog (blog) Post One", tickets.created[0].Title)
 	require.Contains(t, tickets.created[0].Description, "A short summary.")
+	require.Contains(t, tickets.created[0].Description, "Link: ")
 	require.Contains(t, tickets.created[0].Description, "/blog/post-1")
 
 	// Second run files nothing new (seen-set dedupes).

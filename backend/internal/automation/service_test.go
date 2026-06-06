@@ -29,7 +29,9 @@ func (f fakeScraper) Scrape(_ context.Context, u string) (string, string, error)
 
 type fakeSumm struct{}
 
-func (fakeSumm) Summarize(_ context.Context, md string) (string, error) { return "summary:" + md, nil }
+func (fakeSumm) Summarize(_ context.Context, pageTitle, md string) (domain.PostSummary, error) {
+	return domain.PostSummary{Title: pageTitle, Source: "Acme Blog", Type: "blog", Body: "summary:" + md}, nil
+}
 
 type fakeTickets struct {
 	created []domain.TicketPayload

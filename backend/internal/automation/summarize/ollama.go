@@ -1,5 +1,6 @@
-// Package summarize turns post markdown into a short summary via a local Ollama
-// model. The HTTP call is non-streaming and the input is truncated to bound
+// Package summarize turns a post's title + markdown into a structured summary via
+// a local Ollama model. The HTTP call is non-streaming, the model is asked for
+// JSON (so the result is reliably parseable), and the input is truncated to bound
 // latency and memory for small models.
 package summarize
 
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/assafbh/identityhub/internal/domain"
 )
 
 // Ollama is a thin client for the Ollama /api/generate endpoint.
@@ -31,54 +34,114 @@ func New(baseURL, model string, timeout time.Duration, maxInput int) *Ollama {
 	}
 }
 
-const promptTemplate = "Summarize the following blog post in 3-5 sentences for a Jira ticket. " +
-	"Be factual and concise.\n\n---\n%s\n---\nSummary:"
+// promptTemplate asks for a strict JSON object so the result is parseable, and
+// pins down voice (third person, no model self-reference, no "In this blog post"
+// preamble) and shape (a clean title plus the source/type metadata we use to
+// compose the ticket title). %s is the page title; %s is the (truncated) content.
+const promptTemplate = `You extract metadata and write a concise summary of an article for a Jira ticket.
+
+Return ONLY a single JSON object with exactly these string fields:
+  "title":   the article headline, cleaned of any site name or section suffix
+  "source":  the publication or website name (e.g. "Oasis Security")
+  "type":    the content type in one lowercase word (e.g. guide, blog, article, news)
+  "summary": 3-5 sentences of plain prose (no bullet lists, no markdown headings)
+
+Rules for "summary":
+  - Write in the third person about the article's content.
+  - Never refer to yourself, an AI, a model, or "the author"; do not use the first person.
+  - Do not begin with "In this blog post" or similar; state the substance directly.
+  - Be factual and concise.
+
+PAGE TITLE: %s
+
+CONTENT:
+---
+%s
+---`
 
 type generateRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
 	Stream bool   `json:"stream"`
+	Format string `json:"format,omitempty"` // "json" => the model must emit a JSON object
 }
 
 type generateResponse struct {
 	Response string `json:"response"`
 }
 
-// Summarize returns a short summary of the given markdown.
-func (o *Ollama) Summarize(ctx context.Context, markdown string) (string, error) {
+// modelSummary is the JSON shape the model is asked to emit (in Response).
+type modelSummary struct {
+	Title   string `json:"title"`
+	Source  string `json:"source"`
+	Type    string `json:"type"`
+	Summary string `json:"summary"`
+}
+
+// Summarize returns a structured summary of the post. pageTitle is the scraped
+// <title>; it both seeds the model's source/type/title extraction and is the
+// fallback if the model omits a clean title.
+func (o *Ollama) Summarize(ctx context.Context, pageTitle, markdown string) (domain.PostSummary, error) {
 	in := markdown
 	if o.maxInput > 0 && len(in) > o.maxInput {
 		in = in[:o.maxInput]
 	}
 	reqBody, err := json.Marshal(generateRequest{
 		Model:  o.model,
-		Prompt: fmt.Sprintf(promptTemplate, in),
+		Prompt: fmt.Sprintf(promptTemplate, pageTitle, in),
 		Stream: false,
+		Format: "json",
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal ollama request: %w", err)
+		return domain.PostSummary{}, fmt.Errorf("marshal ollama request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+"/api/generate", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", err
+		return domain.PostSummary{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := o.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ollama request: %w", err)
+		return domain.PostSummary{}, fmt.Errorf("ollama request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("ollama returned %d", resp.StatusCode)
+		return domain.PostSummary{}, fmt.Errorf("ollama returned %d", resp.StatusCode)
 	}
 	var out generateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode ollama response: %w", err)
+		return domain.PostSummary{}, fmt.Errorf("decode ollama response: %w", err)
 	}
-	summary := strings.TrimSpace(out.Response)
-	if summary == "" {
-		return "", fmt.Errorf("ollama returned an empty summary")
+
+	return parseSummary(out.Response, pageTitle)
+}
+
+// parseSummary turns the model's JSON response into a PostSummary. If the model
+// did not produce parseable JSON (small models occasionally don't), it falls back
+// to treating the whole response as the summary body with the page title.
+func parseSummary(response, pageTitle string) (domain.PostSummary, error) {
+	raw := strings.TrimSpace(response)
+	var m modelSummary
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		if raw == "" {
+			return domain.PostSummary{}, fmt.Errorf("ollama returned an empty summary")
+		}
+		return domain.PostSummary{Title: pageTitle, Body: raw}, nil
 	}
-	return summary, nil
+
+	body := strings.TrimSpace(m.Summary)
+	if body == "" {
+		return domain.PostSummary{}, fmt.Errorf("ollama returned an empty summary")
+	}
+	title := strings.TrimSpace(m.Title)
+	if title == "" {
+		title = pageTitle
+	}
+	return domain.PostSummary{
+		Title:  title,
+		Source: strings.TrimSpace(m.Source),
+		Type:   strings.TrimSpace(m.Type),
+		Body:   body,
+	}, nil
 }

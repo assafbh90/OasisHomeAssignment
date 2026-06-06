@@ -259,6 +259,16 @@ type ProjectRef struct {
 	Name string
 }
 
+// PostSummary is a structured summary of a discovered blog post produced by the
+// automation summarizer. Keeping the fields separate (rather than one prose blob)
+// lets the caller compose a consistent, parseable ticket title and body.
+type PostSummary struct {
+	Title  string // headline, cleaned of any site/section suffix
+	Source string // publication or site name, e.g. "Oasis Security"
+	Type   string // content type in one word, e.g. "guide", "blog", "article"
+	Body   string // prose summary: third person, no model self-reference
+}
+
 // ClientAuth is the per-call auth context a provider client needs to talk to the
 // provider's API: a valid access token (already refreshed if needed) plus the
 // resolved account. The client builds the API base URL from these itself.

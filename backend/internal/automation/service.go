@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,9 +30,9 @@ type Scraper interface {
 	Scrape(ctx context.Context, url string) (title string, markdown string, err error)
 }
 
-// Summarizer turns markdown into a short summary.
+// Summarizer turns a post's title + markdown into a structured summary.
 type Summarizer interface {
-	Summarize(ctx context.Context, markdown string) (string, error)
+	Summarize(ctx context.Context, pageTitle, markdown string) (domain.PostSummary, error)
 }
 
 // TicketCreator files a ticket. Satisfied by *ticketreport.Service.
@@ -124,15 +125,15 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) error {
 			log.Warn("scrape post failed", logging.Err(err))
 			continue
 		}
-		summary, err := s.summ.Summarize(ctx, markdown)
+		summary, err := s.summ.Summarize(ctx, title, markdown)
 		if err != nil {
 			log.Warn("summarize post failed", logging.Err(err))
 			continue
 		}
 		_, err = s.tickets.CreateTicket(ctx, principal, domain.TicketPayload{
 			ProjectKey:  a.ProjectKey,
-			Title:       truncate(title, maxTitleLen),
-			Description: summary + "\n\nSource: " + postURL,
+			Title:       composeTitle(summary, title),
+			Description: composeDescription(summary, postURL),
 			Labels:      []string{"identityhub", "blog-digest"},
 		})
 		if err != nil {
@@ -147,6 +148,48 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) error {
 		}
 	}
 	return nil
+}
+
+// composeTitle builds the ticket summary as "<source> (<type>) <title>", dropping
+// any part the summarizer left empty and falling back to the scraped page title.
+func composeTitle(sum domain.PostSummary, fallbackTitle string) string {
+	title := strings.TrimSpace(sum.Title)
+	if title == "" {
+		title = strings.TrimSpace(fallbackTitle)
+	}
+	var b strings.Builder
+	if source := strings.TrimSpace(sum.Source); source != "" {
+		b.WriteString(source)
+		b.WriteString(" ")
+	}
+	if typ := strings.TrimSpace(sum.Type); typ != "" {
+		b.WriteString("(")
+		b.WriteString(typ)
+		b.WriteString(") ")
+	}
+	b.WriteString(title)
+	return truncate(strings.TrimSpace(b.String()), maxTitleLen)
+}
+
+// composeDescription builds a stable, parseable ticket body: the prose summary,
+// then a delimiter and labelled Source/Link lines (the origin link matters most).
+func composeDescription(sum domain.PostSummary, postURL string) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(sum.Body))
+	b.WriteString("\n\n---\n")
+	if source := strings.TrimSpace(sum.Source); source != "" {
+		b.WriteString("Source: ")
+		b.WriteString(source)
+		if typ := strings.TrimSpace(sum.Type); typ != "" {
+			b.WriteString(" (")
+			b.WriteString(typ)
+			b.WriteString(")")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Link: ")
+	b.WriteString(postURL)
+	return b.String()
 }
 
 func truncate(s string, n int) string {
