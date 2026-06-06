@@ -8,6 +8,12 @@ This is a proof-of-concept built for clarity, security, and operability: a
 **stateless, horizontally-scalable Go monolith** with clean hexagonal package
 seams (each is extraction-ready into its own service) plus a separate React SPA.
 
+It also ships an **Automation** subsystem (the optional "NHI Blog Digest",
+generalized): a tenant watches a blog/site, and a separate scheduler worker
+discovers new posts, summarizes each with a **local** LLM (Ollama), and files a
+Jira ticket per post — reusing the same Jira client, reactive token manager, and
+RLS.
+
 > **NHI** = Non-Human Identity (service accounts, API keys, service principals).
 > The product detects identity issues (stale accounts, over-privileged keys,
 > expiring credentials); this PoC turns those findings into Jira tickets.
@@ -20,6 +26,7 @@ seams (each is extraction-ready into its own service) plus a separate React SPA.
 - [Configuring Jira (3LO)](#configuring-jira-3lo)
 - [Architecture](#architecture) · [System view](#system-view) · [Package layout](#hexagonal-dependency-inverted) · [Token worlds](#two-distinct-token-worlds-kept-apart-by-design)
 - [Request lifecycles](#request-lifecycles) · [Auth](#1-authentication--every-request) · [OAuth connect](#2-jira-oauth-connect-3lo) · [Reactive refresh](#3-reactive-token-refresh) · [Drift / reconcile](#4-recent-tickets--drift-reconciliation)
+- [Automation (NHI Blog Digest)](#automation-nhi-blog-digest)
 - [Repository structure](#repository-structure)
 - [Data model](#data-model)
 - [Key design decisions (and why)](#key-design-decisions-and-why)
@@ -95,9 +102,10 @@ email + password — the tenant is derived from the matched user.
 
 ### System view
 
-The default deployment is three long-lived containers (plus one-shot `migrate`
-and `seed`). The SPA's nginx serves static assets **and** reverse-proxies the API,
-so the browser stays same-origin and `HttpOnly` session cookies work without CORS.
+The default deployment is long-lived containers (frontend, backend, scheduler,
+ollama, postgres, redis) plus one-shot `migrate` and `seed`. The SPA's nginx
+serves static assets **and** reverse-proxies the API, so the browser stays
+same-origin and `HttpOnly` session cookies work without CORS.
 
 ```text
    browser (SPA, cookie)  ┐
@@ -108,18 +116,26 @@ so the browser stays same-origin and `HttpOnly` session cookies work without COR
                               │ • /api_docs    │         │   replicas)       │
                               └───────────────┘         └───┬───────────┬───┘
                                                             │           │
-                              ┌─────────────────────────────┘           │
-                              ▼                                          ▼
-                   ┌────────────────────┐                  ┌────────────────────┐
-                   │     Postgres 16    │                  │      Redis 7       │
-                   │ users · api_tokens │                  │ sessions · token   │
-                   │ credentials (enc.) │                  │ cache · rate limit │
-                   │ + RLS per tenant   │                  │ oauth state ·      │
-                   └────────────────────┘                  │ ticket cache +     │
-                                                           │ reconcile gate     │
-                   pprof :6060 (internal only)             └────────────────────┘
+                   ┌────────────────────┐                  │           │
+                   │  scheduler worker  │── claim due ──────┤           │
+                   │ (automation runs)  │   (Postgres)      │           │
+                   └─────────┬──────────┘                   │           │
+                             │ summarize                    │           │
+                             ▼                              │           │
+                   ┌────────────────────┐                  │           │
+                   │   ollama (local    │       ┌──────────┘           │
+                   │   LLM, mem-limited)│       ▼                      ▼
+                   └────────────────────┘  ┌────────────────────┐  ┌────────────────────┐
+                                           │     Postgres 16    │  │      Redis 7       │
+                                           │ users · api_tokens │  │ sessions · token   │
+                                           │ credentials (enc.) │  │ cache · rate limit │
+                                           │ automations        │  │ oauth state ·      │
+                                           │ + RLS per tenant   │  │ ticket cache +     │
+                                           └────────────────────┘  │ reconcile gate ·   │
+                                                                   │ automation seen-set│
+                   pprof :6060 (internal only)                     └────────────────────┘
 
-                   backend ──── OAuth 3LO + REST ────► Jira Cloud (user's own workspace)
+   backend / scheduler ──── OAuth 3LO + REST ────► Jira Cloud (user's own workspace)
 ```
 
 ### Two subsystems behind one API, joined by `Identity`
@@ -133,10 +149,10 @@ input.** That value object is the seam between the auth and integration code.
 ```text
                                         ┌─ auth          sessions · users · API keys
   browser ─┐                            │
-           ├─ SPA (nginx, proxies /v1) ─┤
-  scanner ─┘   └─ REST ── api ──Identity┼─ integration   OAuth · encrypted tokens · reactive refresh
+           ├─ SPA (nginx, proxies /v1) ─┤  integration   OAuth · encrypted tokens · reactive refresh
+  scanner ─┘   └─ REST ── api ──Identity┼─ ticketreport  create ticket · recent-tickets view (Redis) · drift reconcile
                                         │
-                                        └─ ticketreport  create ticket · recent-tickets view (Redis) · drift reconcile
+                                        └─ automation    watch site → discover → summarize → file ticket (scheduler)
 ```
 
 ### Hexagonal, dependency-inverted
@@ -148,24 +164,24 @@ interface it needs); concrete adapters live in `storage/postgres`,
 domain is pure Go with no infra imports.
 
 ```text
-       transport/http  (gin: router, middleware, handlers, DTOs)
+   transport/http (gin router/handlers)     scheduler (automation worker)
               │  depends on small consumer-defined interfaces
-              ▼
-   ┌──────────┴───────────┬──────────────────┐
-   │                      │                   │
-  auth              integration         ticketreport         ← feature / service packages
-  session           ├ oauth  (3LO)      (NHI business)
-  apitoken          ├ client (Jira REST)
-                    └ oauthtoken (cipher + reactive refresh)
-   │                      │                   │
-   └──────────┬───────────┴──────────────────┘
+              ▼                                        ▼
+   ┌──────────┴───────────┬──────────────┬────────────┴─────────┐
+   │                      │              │                       │
+  auth              integration     ticketreport            automation        ← feature packages
+  session           ├ oauth  (3LO)  (NHI business)          ├ discover (sitemap)
+  apitoken          ├ client (REST)                         ├ scrape (readability)
+                    └ oauthtoken (cipher + refresh)          └ summarize (ollama)
+   │                      │              │                       │
+   └──────────┬───────────┴──────────────┴───────────────────────┘
               ▼
             domain   (Identity, value objects, sentinel errors — pure)
               ▲
    ┌──────────┴───────────┐
    │  storage/postgres    │   storage/redis        ← adapters implementing the ports
-   │  platform (pools,    │   integration/oauth
-   │  server, shutdown)   │   integration/client
+   │  platform (pools,    │   integration/oauth · client
+   │  server, shutdown)   │   automation/{discover,scrape,summarize}
    └──────────────────────┘
 ```
 
@@ -284,15 +300,70 @@ user, and pre-existing ones on a fresh start.
 
 ---
 
+## Automation (NHI Blog Digest)
+
+The optional "NHI Blog Digest", generalized into a reusable **Automation**
+subsystem. A tenant member defines an automation that **watches a blog/site URL**;
+on a schedule, a separate worker discovers new posts, summarizes each with a
+**local** LLM, and files **one Jira ticket per post** into a chosen project. The
+new code is only the automation glue — it reuses `ticketreport.CreateTicket`, the
+Jira client, the reactive token manager, RLS, and config/logging unchanged. So
+automation-created tickets are tagged `identityhub` and also appear in the
+**recent-tickets** view.
+
+```text
+  API (backend)                         scheduler worker (separate container, mem-limited)
+    CRUD /v1/automations ──► Postgres ◄── claim due rows  (claim_due_automations:
+                              automations    SELECT … FOR UPDATE SKIP LOCKED + lease)
+                                                 │  per claimed row (tenant-scoped):
+                                                 ▼
+   discover ───► diff vs Redis seen-set ───► scrape ──────► summarize ────► create Jira ticket
+   sitemap.xml   new = urls − SMEMBERS        fetch +        Ollama          reuse ticketreport
+   (+ index,     seen:{automation_id}         readability    qwen2.5:0.5b    (also → recent tickets)
+   prefix filter,                             → markdown      (mem-limited)        │
+   lastmod sort)                                                                   ▼
+                                                          on ticket success: SADD seen:{id} url
+```
+
+Design choices:
+
+- **Separate `scheduler` worker, not an in-process goroutine.** The pipeline is
+  slow and memory-heavy (HTTP fetch + LLM inference); isolating it keeps API
+  latency unaffected and lets the worker and Ollama be memory-limited
+  independently. It's the **same binary** run with the `scheduler` subcommand
+  (like `seed`), sharing the single composition root.
+- **Tenant-shared automations, owner's credential.** An automation belongs to a
+  tenant (visible/editable by any member) and pins an `owner_user_id` whose stored
+  Jira credential the worker uses (via the reactive token manager).
+- **Discovery via `sitemap.xml` only** (incl. sitemap-index), filtered to the
+  watched prefix, newest-first by `lastmod`. No `<a>`-crawling. No sitemap → clear
+  `last_error`.
+- **Minimal local scraper** (HTTP → `go-readability` → markdown) and **local
+  summarization** via a pre-warmed Ollama image (`qwen2.5:0.5b` pre-pulled at
+  build), both memory-limited. No external SaaS, no API keys.
+- **Exactly-once-ish, self-healing.** A URL is added to the Redis seen-set
+  **only after its ticket is created**, so a failed post retries next run. A row
+  is claimed by flipping `idle→running` (no overlapping scans); `next_scan_at`
+  advances by the per-automation interval **only on completion**; a `locked_at`
+  lease lets a crashed run self-heal. A per-run cap drains a backlog over runs.
+- **Clear errors.** `last_error` is surfaced per automation ("no sitemap.xml
+  found", "Jira reconnect required", "Ollama timeout"); a `reauth_required` aborts
+  the run cleanly (nothing marked seen).
+
+Managed from the **Automation** tab in the UI, or the `/v1/automations` REST
+endpoints (see [REST API](#rest-api-for-scanners--ci)).
+
+---
+
 ## Repository structure
 
 ```text
 .
 ├── backend/
-│   ├── cmd/api/main.go                 # thin shell → app.Run()
+│   ├── cmd/api/main.go                 # thin shell → app.Run() (dispatches: serve | seed | scheduler)
 │   ├── internal/
-│   │   ├── app/                        # composition root: Wire() binds adapters→ports; Serve/Seed
-│   │   ├── domain/                     # Identity, value objects, sentinel errors, scopes (pure)
+│   │   ├── app/                        # composition root: Wire() binds adapters→ports; Serve/Seed/RunScheduler
+│   │   ├── domain/                     # Identity, value objects, sentinel errors, scopes, Automation (pure)
 │   │   ├── auth/                       # Argon2id hasher (alexedwards/argon2id) + UserAuthenticator
 │   │   ├── session/                    # opaque server-side session manager (Redis-backed)
 │   │   ├── apitoken/                   # OUR machine API keys: issue / authenticate / list / revoke
@@ -301,31 +372,36 @@ user, and pre-existing ones on a fresh start.
 │   │   │   ├── client/                 #   JiraClient — Jira REST ops (create issue, list projects, search-by-label)
 │   │   │   └── oauthtoken/             #   ReactiveTokenManager + AES-256-GCM TokenCipher (PROVIDER tokens)
 │   │   ├── ticketreport/              # NHI business: create ticket, recent-tickets cache, drift reconcile
+│   │   ├── automation/                # blog-digest: RunOnce pipeline + CRUD use-cases + scheduler loop
+│   │   │   ├── discover/              #   sitemap.xml (+ index) parser, prefix filter, lastmod ordering
+│   │   │   ├── scrape/                #   HTTP fetch → go-readability → markdown
+│   │   │   └── summarize/            #   thin Ollama client (POST /api/generate)
 │   │   ├── transport/http/            # gin router, middleware, handlers, DTOs, identity resolvers
 │   │   ├── config/                    # viper load + fail-fast validation; centralized keys
 │   │   ├── logging/                   # slog setup + request-id propagation
 │   │   ├── httpconst/, secret/        # shared HTTP header consts; constant-time secret helpers
 │   │   ├── platform/                  # pgxpool, redis client, http server, graceful shutdown, pprof
 │   │   └── storage/
-│   │       ├── postgres/              # tenant/user/apitoken/credential repos (set per-tx tenant GUC)
-│   │       └── redis/                 # session, token cache, rate limit, oauth state, ticket cache, reconcile gate
-│   ├── migrations/                    # golang-migrate SQL (000001_init up/down): tables + RLS + app role + funcs
+│   │       ├── postgres/              # tenant/user/apitoken/credential/automation repos (set per-tx tenant GUC)
+│   │       └── redis/                 # session, token cache, rate limit, oauth state, ticket cache, reconcile gate, automation seen-set
+│   ├── migrations/                    # golang-migrate SQL: 000001_init (tables+RLS+role+funcs), 000002_automations
 │   ├── docs/                          # generated OpenAPI spec (swaggo): docs.go, swagger.{json,yaml}
-│   ├── test/integration/             # testcontainers end-to-end (real PG + Redis, Jira mocked)
+│   ├── test/integration/             # testcontainers end-to-end (real PG + Redis, Jira + Ollama mocked)
 │   └── go.mod
 ├── frontend/                          # React + Vite + TS SPA
 │   ├── src/
 │   │   ├── App.tsx, main.tsx          # shell + topbar (Sign out, /api_docs ↗)
 │   │   ├── api.ts, types.ts           # fetch wrapper (CSRF header, error envelope) + DTO types
 │   │   ├── styles.css                 # dark theme via CSS vars
-│   │   └── components/                # Login, Dashboard, TicketsPanel (create + recent + refresh), TokensPanel
+│   │   └── components/                # Login, Dashboard, TicketsPanel, TokensPanel, AutomationPanel
 │   ├── nginx.conf                     # serves SPA + proxies /v1|/healthz|/readyz|/api_docs → backend
 │   └── Dockerfile
 ├── deployments/docker/
-│   ├── Dockerfile                     # backend: multi-stage, distroless, non-root
+│   ├── Dockerfile                     # backend (used by api/seed/scheduler): multi-stage, distroless, non-root
+│   ├── ollama.Dockerfile              # FROM ollama/ollama; pre-pulls the model at build (starts warm)
 │   └── postgres-initdb.sh             # grants LOGIN+password to the least-privilege app role
-├── docs/superpowers/specs/           # design spec (Jira ticket drift feature)
-├── docker-compose.yml                 # frontend, backend, postgres, redis, migrate, seed (+ env fail-fast)
+├── docs/superpowers/                 # design specs + implementation plans (drift, automation)
+├── docker-compose.yml                 # frontend, backend, scheduler, ollama, postgres, redis, migrate, seed
 ├── Taskfile.yml                       # go-task: the single local entrypoint
 ├── .env.example                       # documented configuration (copy to .env)
 └── README.md
@@ -340,10 +416,12 @@ Redis, not Postgres.** There is **no tickets table** — the recent-tickets view
 a Redis cache rebuilt from Jira (the source of truth).
 
 ```text
-  tenants ──1:N──┬── users ──1:N──┬── api_tokens            (SHA-256 hash, scopes, prefix)
-                 │                 └── integration_credentials (AES-GCM access+refresh, cloudid, status)
+  tenants ──1:N──┬── users ──1:N──┬── api_tokens               (SHA-256 hash, scopes, prefix)
+                 │                 ├── integration_credentials  (AES-GCM access+refresh, cloudid, status)
+                 │                 └── automations (owner)      (watched site, schedule, run state)
                  │
   enum connection_status = { connected, needs_reauth, revoked }
+  enum automation_status = { idle, running }
 ```
 
 | Table | Purpose | RLS | Notable indexes |
@@ -352,6 +430,7 @@ a Redis cache rebuilt from Jira (the source of truth).
 | `users` | login identities; `email` globally unique | ✓ | `UNIQUE(email)`, `idx_users_tenant_fk` |
 | `api_tokens` | our machine keys | ✓ | `UNIQUE(token_hash)`, `(tenant_id, owner_id, created_at DESC)`, owner FK |
 | `integration_credentials` | encrypted Jira tokens, one per `(tenant,user,provider)` | ✓ | `UNIQUE(tenant_id, user_id, provider)`, user FK |
+| `automations` | watched site + schedule + run state (tenant-shared, owner's credential) | ✓ | partial `(next_scan_at) WHERE enabled`, tenant + owner FK |
 
 **Row-Level Security (defense layer 3).** Tenant tables `ENABLE ROW LEVEL
 SECURITY` with `USING (tenant_id = app_current_tenant())`, where
@@ -359,9 +438,12 @@ SECURITY` with `USING (tenant_id = app_current_tenant())`, where
 repositories set from the request `Identity`. When the GUC is unset the policy
 matches no rows (deny-by-default). The app connects as the **non-superuser**
 `identityhub_app` role so RLS actually applies; migrations/admin run as the
-superuser (which bypasses RLS by design — tests rely on this). Two pre-tenant
-bootstrap reads (login-by-email, API-key-by-hash) go through narrow
-`SECURITY DEFINER` functions instead of weakening the policies.
+superuser (which bypasses RLS by design — tests rely on this). Three pre-tenant
+bootstrap operations go through narrow `SECURITY DEFINER` functions instead of
+weakening the policies: login-by-email (`find_user_for_login`), API-key-by-hash
+(`find_api_token_by_hash`), and the scheduler's cross-tenant due-row claim
+(`claim_due_automations`, which atomically takes due rows `FOR UPDATE SKIP
+LOCKED` and marks them running).
 
 ---
 
@@ -436,6 +518,12 @@ curl -X POST http://localhost:3000/v1/integrations/jira/tickets \
 | `GET /v1/integrations/jira/tickets?project=KEY` | session \| key | recent tickets (cached) |
 | `POST /v1/integrations/jira/reconcile` | session \| key | refresh the cache from Jira (drift) |
 | `DELETE /v1/integrations/jira` | session \| key:`integrations:write` | disconnect |
+| `GET /v1/automations` | session \| key | list automations (tenant-wide) |
+| `POST /v1/automations` | session | create an automation |
+| `GET /v1/automations/{id}` | session \| key | get one |
+| `PUT /v1/automations/{id}` | session | update (full replacement) |
+| `DELETE /v1/automations/{id}` | session | delete (also clears the seen-set) |
+| `POST /v1/automations/{id}/run` | session | run now (`next_scan_at = now()`) |
 | `GET /healthz`, `/readyz` | public | liveness / readiness |
 
 Errors use a uniform envelope `{"error":"code","message":"..."}`; a
@@ -462,6 +550,9 @@ env vars (env wins). Nested keys map to `UPPER_SNAKE` (e.g. `postgres.host` →
 | **API keys** | `API_TOKEN_PREFIX`, `API_TOKEN_CACHE_TTL` | plaintext prefix + Redis cache TTL |
 | **Rate limit** | `RATELIMIT_LOGIN_MAX`, `RATELIMIT_LOGIN_WINDOW` | per-IP and per-account on login |
 | **Jira 3LO** | `JIRA_CLIENT_ID/SECRET`, `JIRA_REDIRECT_URI`, `JIRA_SCOPES`, `JIRA_AUTH_URL`, `JIRA_TOKEN_URL`, `JIRA_API_BASE_URL`, `JIRA_USE_PKCE`, `JIRA_INACTIVITY_WINDOW`, `JIRA_ACCESS_TOKEN_SKEW` | redirect URI is derived from `PUBLIC_HOST` unless set |
+| **Ollama (LLM)** | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `OLLAMA_MAX_INPUT_CHARS`, `OLLAMA_MEM_LIMIT` | model is pre-pulled at image build; memory-capped |
+| **Scheduler** | `SCHEDULER_TICK`, `SCHEDULER_CLAIM_BATCH`, `SCHEDULER_LEASE`, `SCHEDULER_MEM_LIMIT` | poll interval, claim batch size, crash-lease |
+| **Automation** | `AUTOMATION_MAX_POSTS_PER_RUN`, `AUTOMATION_DEFAULT_INTERVAL`, `AUTOMATION_HTTP_TIMEOUT` | per-run cap drains backlogs over runs |
 | **Seed** | `SEED_ORG_SLUG/NAME`, `SEED_USER_EMAIL/PASSWORD` | the first org + login |
 | **Public origin** | `PUBLIC_HOST`, `FRONTEND_PORT` | callback derives from these |
 
@@ -498,7 +589,10 @@ task cover              # combined statement coverage
 Integration tests cover: login→session→logout; API-key issue→use→revoke; the full
 Jira flow (connect→callback with state+identity cross-check→**encrypted**
 credential→create ticket→recent tickets→reconcile→disconnect); the reauth/reconnect
-flow; and multi-tenant isolation proven at the repository **and** RLS layers.
+flow; multi-tenant isolation proven at the repository **and** RLS layers; and the
+**automation** pipeline (`claim_due_automations` with `SKIP LOCKED` + lease reaper,
+create→run against an httptest blog + mock Ollama→ticket created→appears in recent
+tickets→second run creates no duplicate).
 
 ---
 
@@ -529,4 +623,3 @@ flow; and multi-tenant isolation proven at the repository **and** RLS layers.
   files a Jira ticket per post into a chosen project. Automations are tenant-shared
   and use the creator's Jira credential; processed URLs are tracked in Redis so each
   post is filed once. See `docs/superpowers/specs/2026-06-06-nhi-automation-blog-digest-design.md`.
-```
