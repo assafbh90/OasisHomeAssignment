@@ -165,9 +165,9 @@ func TestAutomation_EndToEnd(t *testing.T) {
 	_, err := svc.RunOnce(ctx, a)
 	require.NoError(t, err)
 	require.Len(t, tickets.created, 1)
-	require.Equal(t, "Test Blog (blog) Post One", tickets.created[0].Title)
+	require.Equal(t, "[Test Blog] (blog) Post One", tickets.created[0].Title)
 	require.Contains(t, tickets.created[0].Description, "A short summary.")
-	require.Contains(t, tickets.created[0].Description, "Link: ")
+	require.Contains(t, tickets.created[0].Description, "**Link:**")
 	require.Contains(t, tickets.created[0].Description, "/blog/post-1")
 
 	// Second run files nothing new (seen-set dedupes).

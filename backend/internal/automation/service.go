@@ -167,8 +167,9 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 	return RunResult{Created: created, Backlog: backlog}, nil
 }
 
-// composeTitle builds the ticket summary as "<source> (<type>) <title>", dropping
-// any part the summarizer left empty and falling back to the scraped page title.
+// composeTitle builds the ticket summary as "[<source>] (<type>) <title>",
+// dropping any bracketed part the summarizer left empty and falling back to the
+// scraped page title.
 func composeTitle(sum domain.PostSummary, fallbackTitle string) string {
 	title := strings.TrimSpace(sum.Title)
 	if title == "" {
@@ -176,8 +177,9 @@ func composeTitle(sum domain.PostSummary, fallbackTitle string) string {
 	}
 	var b strings.Builder
 	if source := strings.TrimSpace(sum.Source); source != "" {
+		b.WriteString("[")
 		b.WriteString(source)
-		b.WriteString(" ")
+		b.WriteString("] ")
 	}
 	if typ := strings.TrimSpace(sum.Type); typ != "" {
 		b.WriteString("(")
@@ -188,14 +190,15 @@ func composeTitle(sum domain.PostSummary, fallbackTitle string) string {
 	return truncate(strings.TrimSpace(b.String()), maxTitleLen)
 }
 
-// composeDescription builds a stable, parseable ticket body: the prose summary,
-// then a delimiter and labelled Source/Link lines (the origin link matters most).
+// composeDescription builds the ticket body as Jira-friendly Markdown (the client
+// renders it to ADF): the summary, a divider, then bold-labelled Source/Link
+// lines (the origin link matters most). The labels are also stable enough to parse.
 func composeDescription(sum domain.PostSummary, postURL string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(sum.Body))
 	b.WriteString("\n\n---\n")
 	if source := strings.TrimSpace(sum.Source); source != "" {
-		b.WriteString("Source: ")
+		b.WriteString("**Source:** ")
 		b.WriteString(source)
 		if typ := strings.TrimSpace(sum.Type); typ != "" {
 			b.WriteString(" (")
@@ -204,7 +207,7 @@ func composeDescription(sum domain.PostSummary, postURL string) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Link: ")
+	b.WriteString("**Link:** ")
 	b.WriteString(postURL)
 	return b.String()
 }

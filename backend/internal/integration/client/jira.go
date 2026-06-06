@@ -237,19 +237,80 @@ func (c *JiraClient) doJSON(ctx context.Context, method string, auth domain.Clie
 	return nil
 }
 
-// adfDoc wraps plain text in a minimal Atlassian Document Format document, which
-// the Jira v3 issue API requires for the description field.
+// adfDoc renders a small Markdown subset into an Atlassian Document Format
+// document, which the Jira v3 issue API requires for the description field.
+// Supported: blank-line-separated paragraphs, "- "/"* " bullet lists, a "---"
+// horizontal rule, and inline **bold**. Plain text (no markers) renders as plain
+// paragraphs, so manually-typed descriptions still work unchanged.
 func adfDoc(text string) map[string]any {
-	return map[string]any{
-		"type":    "doc",
-		"version": 1,
-		"content": []any{
-			map[string]any{
-				"type":    "paragraph",
-				"content": []any{map[string]any{"type": "text", "text": text}},
-			},
-		},
+	content := []any{}
+	var bullets []any
+	flushBullets := func() {
+		if len(bullets) > 0 {
+			content = append(content, map[string]any{"type": "bulletList", "content": bullets})
+			bullets = nil
+		}
 	}
+
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		switch {
+		case line == "":
+			flushBullets() // blank line = block break
+		case line == "---" || line == "***":
+			flushBullets()
+			content = append(content, map[string]any{"type": "rule"})
+		case strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* "):
+			if item := adfInline(strings.TrimSpace(line[2:])); len(item) > 0 {
+				bullets = append(bullets, map[string]any{
+					"type":    "listItem",
+					"content": []any{map[string]any{"type": "paragraph", "content": item}},
+				})
+			}
+		default:
+			flushBullets()
+			content = append(content, map[string]any{"type": "paragraph", "content": adfInline(line)})
+		}
+	}
+	flushBullets()
+	if len(content) == 0 {
+		content = append(content, map[string]any{"type": "paragraph"})
+	}
+	return map[string]any{"type": "doc", "version": 1, "content": content}
+}
+
+// adfInline splits a line into ADF text nodes, turning **bold** spans into nodes
+// carrying a strong mark. Empty spans are dropped (ADF text nodes must be
+// non-empty). An unmatched "**" is treated as literal text.
+func adfInline(s string) []any {
+	nodes := []any{}
+	appendText := func(text string, bold bool) {
+		if text == "" {
+			return
+		}
+		node := map[string]any{"type": "text", "text": text}
+		if bold {
+			node["marks"] = []any{map[string]any{"type": "strong"}}
+		}
+		nodes = append(nodes, node)
+	}
+	for {
+		start := strings.Index(s, "**")
+		if start < 0 {
+			appendText(s, false)
+			break
+		}
+		appendText(s[:start], false)
+		rest := s[start+2:]
+		end := strings.Index(rest, "**")
+		if end < 0 {
+			appendText("**"+rest, false) // no closing marker: literal
+			break
+		}
+		appendText(rest[:end], true)
+		s = rest[end+2:]
+	}
+	return nodes
 }
 
 // sanitizeLabels drops empties and replaces spaces (Jira labels can't contain

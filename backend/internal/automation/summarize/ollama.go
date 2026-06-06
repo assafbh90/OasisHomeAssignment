@@ -36,21 +36,27 @@ func New(baseURL, model string, timeout time.Duration, maxInput int) *Ollama {
 
 // promptTemplate asks for a strict JSON object so the result is parseable, and
 // pins down voice (third person, no model self-reference, no "In this blog post"
-// preamble) and shape (a clean title plus the source/type metadata we use to
-// compose the ticket title). %s is the page title; %s is the (truncated) content.
-const promptTemplate = `You extract metadata and write a concise summary of an article for a Jira ticket.
+// preamble), depth (a thorough multi-paragraph summary), and Jira-friendly
+// Markdown (**bold** key terms, a short takeaways list) which the client renders
+// to ADF. %s is the page title; %s is the (truncated) content.
+const promptTemplate = `You extract metadata and write a detailed summary of an article for a Jira ticket.
 
 Return ONLY a single JSON object with exactly these string fields:
   "title":   the article headline, cleaned of any site name or section suffix
   "source":  the publication or website name (e.g. "Oasis Security")
   "type":    the content type in one lowercase word (e.g. guide, blog, article, news)
-  "summary": 3-5 sentences of plain prose (no bullet lists, no markdown headings)
+  "summary": a thorough summary (see rules)
 
 Rules for "summary":
+  - Cover the article in depth: an opening paragraph with the main thesis, then the
+    key points and any concrete recommendations or takeaways. Aim for 8-12 sentences.
+  - Use Jira-friendly Markdown: separate paragraphs with a blank line, **bold** the
+    most important terms, and you MAY end with a short "- " bulleted list of the key
+    takeaways. Do not use headings.
   - Write in the third person about the article's content.
   - Never refer to yourself, an AI, a model, or "the author"; do not use the first person.
   - Do not begin with "In this blog post" or similar; state the substance directly.
-  - Be factual and concise.
+  - Be factual; do not invent details not present in the content.
 
 PAGE TITLE: %s
 
