@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { type Connection, type Project } from "../types";
 import { AutomationPanel } from "./AutomationPanel";
-import { TicketsPanel } from "./TicketsPanel";
+import { IntegrationsTab } from "./IntegrationsTab";
 import { TokensPanel } from "./TokensPanel";
+
+type Tab = "integration" | "automations" | "tokens";
 
 export function Dashboard() {
   const [conn, setConn] = useState<Connection | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"findings" | "automation">("findings");
+  const [tab, setTab] = useState<Tab>("integration");
 
   const loadStatus = useCallback(async () => {
     const c = await api.get<Connection>("/v1/integrations/jira/status");
@@ -22,6 +24,8 @@ export function Dashboard() {
       } catch {
         setProjects([]);
       }
+    } else {
+      setProjects([]);
     }
   }, []);
 
@@ -42,7 +46,6 @@ export function Dashboard() {
 
   async function disconnect() {
     await api.del("/v1/integrations/jira");
-    setProjects([]);
     await loadStatus();
     setNotice("Jira disconnected.");
   }
@@ -54,54 +57,22 @@ export function Dashboard() {
       {notice && <div className="alert info span2">{notice}</div>}
 
       <nav className="tabs span2">
-        <button className={tab === "findings" ? "tab active" : "tab"} onClick={() => setTab("findings")}>
-          Findings
+        <button className={tab === "integration" ? "tab active" : "tab"} onClick={() => setTab("integration")}>
+          Integration
         </button>
-        <button className={tab === "automation" ? "tab active" : "tab"} onClick={() => setTab("automation")}>
-          Automation
+        <button className={tab === "automations" ? "tab active" : "tab"} onClick={() => setTab("automations")}>
+          Automations
+        </button>
+        <button className={tab === "tokens" ? "tab active" : "tab"} onClick={() => setTab("tokens")}>
+          Auth tokens
         </button>
       </nav>
 
-      <section className="card span2">
-        <div className="row spread">
-          <div>
-            <h2>Jira integration</h2>
-            <ConnectionBadge conn={conn} />
-          </div>
-          <div className="row gap">
-            {conn?.connected ? (
-              <button className="ghost" onClick={disconnect}>Disconnect</button>
-            ) : (
-              <button className="primary" onClick={connect}>Connect Jira</button>
-            )}
-            {conn && !conn.connected && conn.status === "needs_reauth" && (
-              <button className="primary" onClick={connect}>Reconnect</button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {tab === "findings" ? (
-        conn?.connected ? (
-          <TicketsPanel projects={projects} onReconnect={connect} />
-        ) : (
-          <section className="card span2 muted">
-            Connect your Jira workspace to start reporting NHI findings.
-          </section>
-        )
-      ) : (
-        <AutomationPanel projects={projects} hasJira={!!conn?.connected} />
+      {tab === "integration" && (
+        <IntegrationsTab conn={conn} projects={projects} onConnect={connect} onDisconnect={disconnect} />
       )}
-
-      {tab === "findings" && <TokensPanel />}
+      {tab === "automations" && <AutomationPanel projects={projects} hasJira={!!conn?.connected} />}
+      {tab === "tokens" && <TokensPanel />}
     </div>
   );
-}
-
-function ConnectionBadge({ conn }: { conn: Connection | null }) {
-  if (!conn || !conn.connected) {
-    const reauth = conn?.status === "needs_reauth";
-    return <span className={`badge ${reauth ? "warn" : "muted"}`}>{reauth ? "Needs reconnect" : "Not connected"}</span>;
-  }
-  return <span className="badge ok">Connected</span>;
 }
