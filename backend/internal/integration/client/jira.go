@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
+
 	"github.com/assafbh/identityhub/internal/domain"
 	"github.com/assafbh/identityhub/internal/httpconst"
 )
@@ -253,15 +255,10 @@ func adfDoc(text string) map[string]any {
 // sanitizeLabels drops empties and replaces spaces (Jira labels can't contain
 // whitespace).
 func sanitizeLabels(in []string) []string {
-	out := make([]string, 0, len(in))
-	for _, l := range in {
+	return lo.FilterMap(in, func(l string, _ int) (string, bool) {
 		l = strings.TrimSpace(l)
-		if l == "" {
-			continue
-		}
-		out = append(out, strings.ReplaceAll(l, " ", "-"))
-	}
-	return out
+		return strings.ReplaceAll(l, " ", "-"), l != ""
+	})
 }
 
 func issueURL(siteURL, key string) string {

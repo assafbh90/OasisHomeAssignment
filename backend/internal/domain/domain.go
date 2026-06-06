@@ -234,8 +234,12 @@ type ConnectionInfo struct {
 
 // IdentityHubLabel tags every ticket IdentityHub creates in the provider, so the
 // set is discoverable by a label search (drift reconciliation) regardless of
-// which user created it.
-const IdentityHubLabel = "identityhub"
+// which user created it. BlogDigestLabel additionally marks tickets filed by an
+// automation, distinguishing them from manually reported findings.
+const (
+	IdentityHubLabel = "identityhub"
+	BlogDigestLabel  = "blog-digest"
+)
 
 // TicketPayload is a provider-agnostic request to create a record (an NHI
 // finding ticket). For Jira it maps to an issue.

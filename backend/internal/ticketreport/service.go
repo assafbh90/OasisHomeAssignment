@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/samber/lo"
 
 	"github.com/assafbh/identityhub/internal/domain"
 	"github.com/assafbh/identityhub/internal/logging"
@@ -144,9 +145,8 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 		return err
 	}
 
-	tickets := make([]domain.CreatedTicket, 0, len(found))
-	for _, t := range found {
-		tickets = append(tickets, domain.CreatedTicket{
+	tickets := lo.Map(found, func(t domain.ProviderTicket, _ int) domain.CreatedTicket {
+		return domain.CreatedTicket{
 			TenantID:   principal.TenantID,
 			Provider:   s.provider,
 			ProjectKey: t.ProjectKey,
@@ -154,8 +154,8 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 			IssueURL:   t.URL,
 			Title:      t.Title,
 			CreatedAt:  t.CreatedAt,
-		})
-	}
+		}
+	})
 	return s.cache.Replace(ctx, principal.TenantID, tickets)
 }
 
