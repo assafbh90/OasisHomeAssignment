@@ -25,6 +25,7 @@ var (
 	// Integration
 	ErrReauthRequired         = errors.New("reauth required")
 	ErrCredentialNotFound     = errors.New("credential not found")
+	ErrAutomationNotFound     = errors.New("automation not found")
 	ErrProviderNotSupported   = errors.New("provider not supported")
 	ErrCapabilityNotSupported = errors.New("capability not supported")
 	ErrStateNotFound          = errors.New("oauth state not found or already used")
