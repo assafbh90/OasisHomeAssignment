@@ -24,12 +24,11 @@ RLS.
 
 - [Quickstart](#quickstart)
 - [Configuring Jira (3LO)](#configuring-jira-3lo)
-- [Architecture](#architecture) · [System view](#system-view) · [Package layout](#hexagonal-dependency-inverted) · [Token worlds](#two-distinct-token-worlds-kept-apart-by-design)
-- [Request lifecycles](#request-lifecycles) · [Auth](#1-authentication--every-request) · [OAuth connect](#2-jira-oauth-connect-3lo) · [Reactive refresh](#3-reactive-token-refresh) · [Drift / reconcile](#4-recent-tickets--drift-reconciliation)
+- [Architecture](docs/ARCHITECTURE.md) — system view · package layout · token worlds · request lifecycles
 - [Automation (NHI Blog Digest)](#automation-nhi-blog-digest)
 - [Repository structure](#repository-structure)
-- [Data model](#data-model)
-- [Key design decisions (and why)](#key-design-decisions-and-why)
+- [Data model](#data-model) · [full reference](docs/DATA-MODEL.md)
+- [Key design decisions](docs/DECISIONS.md)
 - [REST API](#rest-api-for-scanners--ci)
 - [Configuration reference](#configuration-reference)
 - [Adding another provider](#adding-another-provider-3-steps)
@@ -100,203 +99,16 @@ email + password — the tenant is derived from the matched user.
 
 ## Architecture
 
-### System view
+IdentityHub is a **modular monolith** with a **hexagonal / ports-and-adapters**
+layout: a stateless, horizontally-scalable Go backend plus a decoupled React SPA.
+Interfaces are consumer-defined, concrete adapters live in `storage/*` and
+`integration/*`, and wiring happens only in the composition root (`internal/app`).
+The two token worlds — *our* API keys (SHA-256) and *Jira's* OAuth tokens
+(AES-256-GCM) — are kept strictly apart.
 
-The default deployment is long-lived containers (frontend, backend, scheduler,
-ollama, postgres, redis) plus one-shot `migrate` and `seed`. The SPA's nginx
-serves static assets **and** reverse-proxies the API, so the browser stays
-same-origin and `HttpOnly` session cookies work without CORS.
-
-```text
-   browser (SPA, cookie)  ┐
-                          ├─► ┌───────────────┐  /v1/*  ┌───────────────────┐
-   scanner / CI (API key) ┘   │   frontend    │  proxy  │     backend       │
-                              │   nginx :80    ├────────►│   gin :8080       │
-                              │ • serves SPA   │         │  (N stateless     │
-                              │ • /api_docs    │         │   replicas)       │
-                              └───────────────┘         └───┬───────────┬───┘
-                                                            │           │
-                   ┌────────────────────┐                  │           │
-                   │  scheduler worker  │── claim due ──────┤           │
-                   │ (automation runs)  │   (Postgres)      │           │
-                   └─────────┬──────────┘                   │           │
-                             │ summarize                    │           │
-                             ▼                              │           │
-                   ┌────────────────────┐                  │           │
-                   │   ollama (local    │       ┌──────────┘           │
-                   │   LLM, mem-limited)│       ▼                      ▼
-                   └────────────────────┘  ┌────────────────────┐  ┌────────────────────┐
-                                           │     Postgres 16    │  │      Redis 7       │
-                                           │ users · api_tokens │  │ sessions · token   │
-                                           │ credentials (enc.) │  │ cache · rate limit │
-                                           │ automations        │  │ oauth state ·      │
-                                           │ + RLS per tenant   │  │ ticket cache +     │
-                                           └────────────────────┘  │ reconcile gate ·   │
-                                                                   │ automation seen-set│
-                   pprof :6060 (internal only)                     └────────────────────┘
-
-   backend / scheduler ──── OAuth 3LO + REST ────► Jira Cloud (user's own workspace)
-```
-
-### Two subsystems behind one API, joined by `Identity`
-
-The auth middleware resolves the caller from a **session cookie** or a **Bearer
-API key**, builds an `Identity{UserID, TenantID, Scopes, AuthMethod}`, and injects
-it into the request context. **Every protected handler — including all
-integration endpoints — reads tenant/user from `Identity`, never from request
-input.** That value object is the seam between the auth and integration code.
-
-```text
-                                        ┌─ auth          sessions · users · API keys
-  browser ─┐                            │
-           ├─ SPA (nginx, proxies /v1) ─┤  integration   OAuth · encrypted tokens · reactive refresh
-  scanner ─┘   └─ REST ── api ──Identity┼─ ticketreport  create ticket · recent-tickets view (Redis) · drift reconcile
-                                        │
-                                        └─ automation    watch site → discover → summarize → file ticket (scheduler)
-```
-
-### Hexagonal, dependency-inverted
-
-Interfaces are **consumer-defined** (each feature package declares the small
-interface it needs); concrete adapters live in `storage/postgres`,
-`storage/redis`, `integration/oauth`, `integration/client`. Wiring happens
-**only** in the composition root (`internal/app`, called from `cmd/api`). The
-domain is pure Go with no infra imports.
-
-```text
-   transport/http (gin router/handlers)     scheduler (automation worker)
-              │  depends on small consumer-defined interfaces
-              ▼                                        ▼
-   ┌──────────┴───────────┬──────────────┬────────────┴─────────┐
-   │                      │              │                       │
-  auth              integration     ticketreport            automation        ← feature packages
-  session           ├ oauth  (3LO)  (NHI business)          ├ discover (sitemap)
-  apitoken          ├ client (REST)                         ├ scrape (readability)
-                    └ oauthtoken (cipher + refresh)          └ summarize (ollama)
-   │                      │              │                       │
-   └──────────┬───────────┴──────────────┴───────────────────────┘
-              ▼
-            domain   (Identity, value objects, sentinel errors — pure)
-              ▲
-   ┌──────────┴───────────┐
-   │  storage/postgres    │   storage/redis        ← adapters implementing the ports
-   │  platform (pools,    │   integration/oauth · client
-   │  server, shutdown)   │   automation/{discover,scrape,summarize}
-   └──────────────────────┘
-```
-
-### Two distinct "token worlds" (kept apart by design)
-
-| | What | Where | Package |
-|---|---|---|---|
-| **API keys (PATs)** | *Our* tokens for scanners/CI | SHA-256 hash in Postgres + Redis cache | `internal/apitoken` |
-| **OAuth provider tokens** | *Jira's* access/refresh tokens | AES-256-GCM encrypted in Postgres | `internal/integration/oauthtoken` |
-
-They have separate lifecycles, storage, and revocation — never conflated.
-
-### Scalability
-
-App instances are **stateless**; all shared state (sessions, token cache,
-rate-limit counters, OAuth state, the ticket cache + reconcile gate) lives in
-**Redis**, so you can run N replicas behind a load balancer
-(`docker compose up --scale backend=2`). Validated API keys are Redis-cached to
-avoid a DB hit per request. Postgres uses a tuned `pgxpool` (bounded conns,
-statement + idle-in-tx timeouts). Graceful shutdown drains in-flight requests for
-clean rolling deploys.
-
----
-
-## Request lifecycles
-
-### 1. Authentication — every request
-
-```text
-  request ─► RequestID ─► SecureHeaders ─► [CORS] ─► RequireAuth ─► CSRF ─► RequireScope ─► handler
-                                                          │
-                                          ┌───────────────┴────────────────┐
-                                          │  ChainIdentityResolver          │
-                                          │   1. Bearer "ih_pat_…"  → Redis │
-                                          │      cache → SHA-256 lookup     │
-                                          │   2. session cookie     → Redis │
-                                          └───────────────┬────────────────┘
-                                                          ▼
-                                          Identity{UserID, TenantID, Scopes, AuthMethod}
-                                                  put on request context
-```
-
-CSRF (double-submit) applies only to **cookie-authenticated** unsafe methods;
-Bearer-key calls (scanners/CI) skip it. Some routes additionally require
-`RequireSessionMethod` (browser-only: login/logout, OAuth, token issue) or
-`RequireScope(integrations:write)`.
-
-### 2. Jira OAuth connect (3LO)
-
-```text
-  user clicks "Connect Jira"
-        │  GET /v1/integrations/jira/connect
-        ▼
-  StartAuthorization: make PKCE verifier+challenge, store one-time `state`
-        │  bound to {tenant,user} in Redis (TTL 10m) → return Atlassian auth URL
-        ▼
-  browser → Atlassian consent → redirect to /v1/integrations/jira/callback?state&code
-        │
-        ▼  GET /v1/integrations/jira/callback   (must carry the session cookie)
-  CompleteAuthorization:
-        consume state  → cross-check {tenant,user} == session Identity   (anti-mix-up)
-        exchange code+verifier → access/refresh tokens (x/oauth2)
-        resolve accessible-resource → cloudid + site URL
-        AES-256-GCM encrypt tokens → store in integration_credentials (status=connected)
-        │
-        └─► fire-and-forget reconcileAsync (detached ctx) so a fresh user
-            immediately sees pre-existing identityhub-tagged tickets
-        ▼
-  302 back to the SPA (?connected=jira)
-```
-
-### 3. Reactive token refresh
-
-No background warmer — a Jira access token is refreshed **only when expired at
-use time**:
-
-```text
-  FetchValidToken(tenant,user):
-    load credential
-      ├─ access token still valid (− skew)?            → return it (no network)
-      ├─ status == needs_reauth, or refresh token
-      │  provably dead (inactivity window passed)?      → ErrReauthRequired → 409
-      └─ otherwise → provider.RefreshTokens
-                       ├─ success → persist rotated refresh token + new expiry → return
-                       └─ invalid_grant / 4xx → mark needs_reauth → ErrReauthRequired → 409
-```
-
-The client surfaces `409 reauth_required` and prompts a reconnect, instead of a
-doomed API call or a retry storm. (A cross-replica single-flight on concurrent
-refreshes — e.g. `SELECT … FOR UPDATE` on the credential row — is the natural
-next step; intentionally left out of this PoC for simplicity.)
-
-### 4. Recent tickets + drift reconciliation
-
-**Jira is the source of truth.** Every ticket IdentityHub creates is tagged with
-an `identityhub` Jira label; the "recent tickets" view is a per-tenant **Redis
-cache** of the Jira label search — so it surfaces tickets created by *any* tenant
-user, and pre-existing ones on a fresh start.
-
-```text
-  create ticket  ─► JiraClient.CreateIssue (append `identityhub` label) ─► cache.Add (prepend)
-
-  refresh (button)  ─► POST …/reconcile (force) ─┐
-  connect (async)   ─► reconcileAsync ───────────┤
-                                                 ▼
-                                    RedisReconcileGate.TryAcquire
-                              ┌──────────────────┴───────────────────┐
-                              │ throttle: skip if reconciled < 30m ago│  (unless forced)
-                              │ single-flight: SET NX lock per tenant │  (collapses a
-                              └──────────────────┬───────────────────┘   burst of connects)
-                                                 ▼
-                              JiraClient.SearchByLabel  (JQL labels="identityhub", paginated)
-                                                 ▼
-                              cache.Replace  (newest N, TTL 24h)
-```
+> **Full detail — system view, package layout, the two token worlds, scalability,
+> and the per-request lifecycles (auth, OAuth connect, reactive refresh, drift
+> reconcile) — is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).**
 
 ---
 
@@ -411,6 +223,9 @@ endpoints (see [REST API](#rest-api-for-scanners--ci)).
 
 ## Data model
 
+> **Full column / index / TTL reference — every Postgres table, the RLS
+> mechanism, and all Redis keys — is in [docs/DATA-MODEL.md](docs/DATA-MODEL.md).**
+
 Single Postgres database. **Sessions, caches, and rate-limit counters live in
 Redis, not Postgres.** There is **no tickets table** — the recent-tickets view is
 a Redis cache rebuilt from Jira (the source of truth).
@@ -449,39 +264,13 @@ LOCKED` and marks them running).
 
 ## Key design decisions (and why)
 
-- **Opaque, server-side sessions over JWT-in-cookie.** Session IDs are 256-bit
-  random tokens; all state is in Redis with a sliding TTL bounded by an absolute
-  lifetime. This makes sessions **instantly revocable** and leaks nothing into the
-  cookie. Cookies are `HttpOnly`, `SameSite=Lax` (so the OAuth callback navigation
-  carries them), `Secure` behind TLS.
-- **Reactive (lazy) token refresh — no background warmer.** A Jira access token is
-  refreshed only when expired at use time, and the rotated refresh token is
-  persisted. If the *refresh* token is provably dead (inactivity window passed) or
-  the provider rejects it (`invalid_grant`), the credential is flipped to
-  `needs_reauth` and the client gets a first-class `409 reauth_required` telling it
-  to reconnect — instead of a doomed API call or a retry storm. (Cross-replica
-  single-flight via a `SELECT … FOR UPDATE` row lock is the natural next step; it's
-  intentionally left out of this PoC for simplicity.)
-- **Defense-in-depth multi-tenancy.** (1) Middleware resolves tenant only from the
-  session/token. (2) Every repository query filters by `tenant_id` and is passed
-  the tenant explicitly. (3) **Postgres Row-Level Security** denies any row whose
-  `tenant_id` ≠ the per-transaction `app.tenant_id` GUC. The app connects as a
-  **non-superuser** role so RLS actually applies; migrations/admin use the
-  superuser. The two pre-tenant lookups (login-by-email, API-key-by-hash) go
-  through narrow `SECURITY DEFINER` functions rather than weakening the policy.
-- **Secrets handled carefully.** Passwords: Argon2id (~64 MiB, t=3, p=4) via the
-  maintained `alexedwards/argon2id`. Jira tokens: AES-256-GCM at rest (random
-  nonce per encryption, tamper-detected). API keys: only the SHA-256 hash is
-  stored; the plaintext is shown **once**. Constant-time comparisons for secrets.
-  OAuth `state` is one-time, bound to `{tenant,user}`, **and** cross-checked
-  against the session identity on callback (defends the "callback bound to the
-  wrong user" class of attack); PKCE (S256) is used. Rate limiting on login
-  (GCRA via `go-redis/redis_rate`). `pprof` runs on a separate internal-only port.
-  Secrets never appear in logs (only token IDs/prefixes and tenant/user IDs).
-- **Jira is the source of truth for tickets.** Rather than a Postgres mirror that
-  can drift, the recent-tickets view is a Redis cache rebuilt from a Jira label
-  search — self-healing, and naturally discovers tickets created by other tenant
-  users or before the app existed.
+Opaque server-side sessions over JWT, reactive (lazy) token refresh,
+defense-in-depth multi-tenancy with Postgres RLS, careful secret handling
+(Argon2id / AES-256-GCM / SHA-256), and treating Jira as the source of truth for
+tickets.
+
+> **Each decision, with its full rationale and trade-offs, is written up in
+> [docs/DECISIONS.md](docs/DECISIONS.md).**
 
 ---
 
