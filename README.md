@@ -4,9 +4,30 @@ A multi-tenant backend + decoupled SPA that lets an authenticated user connect
 their **own Jira Cloud** workspace (OAuth 2.0 3LO) and file **NHI finding
 tickets** — from the UI and from a REST API guarded by an API key.
 
-This is a proof-of-concept built for clarity, security, and operability. It is a
+This is a proof-of-concept built for clarity, security, and operability: a
 **stateless, horizontally-scalable Go monolith** with clean hexagonal package
 seams (each is extraction-ready into its own service) plus a separate React SPA.
+
+> **NHI** = Non-Human Identity (service accounts, API keys, service principals).
+> The product detects identity issues (stale accounts, over-privileged keys,
+> expiring credentials); this PoC turns those findings into Jira tickets.
+
+---
+
+## Table of contents
+
+- [Quickstart](#quickstart)
+- [Configuring Jira (3LO)](#configuring-jira-3lo)
+- [Architecture](#architecture) · [System view](#system-view) · [Package layout](#hexagonal-dependency-inverted) · [Token worlds](#two-distinct-token-worlds-kept-apart-by-design)
+- [Request lifecycles](#request-lifecycles) · [Auth](#1-authentication--every-request) · [OAuth connect](#2-jira-oauth-connect-3lo) · [Reactive refresh](#3-reactive-token-refresh) · [Drift / reconcile](#4-recent-tickets--drift-reconciliation)
+- [Repository structure](#repository-structure)
+- [Data model](#data-model)
+- [Key design decisions (and why)](#key-design-decisions-and-why)
+- [REST API](#rest-api-for-scanners--ci)
+- [Configuration reference](#configuration-reference)
+- [Adding another provider](#adding-another-provider-3-steps)
+- [Testing](#testing)
+- [Assumptions & scope](#assumptions--scope)
 
 ---
 
@@ -21,7 +42,7 @@ cp .env.example .env
 #   openssl rand -base64 32   -> paste into CRYPTO_TOKEN_KEY
 # (Optional now, required for Jira) fill JIRA_CLIENT_ID / JIRA_CLIENT_SECRET.
 
-task up                      # builds & starts frontend, backend, postgres, redis, migrate, seed
+task up                # builds & starts frontend, backend, postgres, redis, migrate, seed
 ```
 
 Then open **http://localhost:3000** and sign in with the seeded first account
@@ -33,10 +54,21 @@ email + password — the tenant is derived from the matched user.
 | Email | `SEED_USER_EMAIL` | `admin@acme.test` |
 | Password | `SEED_USER_PASSWORD` | `password123` |
 
-`task down` tears everything down (and volumes). Other handy tasks: `task test`,
-`task test-integration`, `task lint`, `task migrate`, `task run`, `task --list`.
+`task down` tears everything down (and volumes). Handy tasks (`task --list`):
 
-> The stack boots without Jira credentials so you can explore auth and the UI;
+| Task | What it does |
+|---|---|
+| `task up` / `task down` | build & start the full stack / stop it and drop volumes |
+| `task infra` | start only Postgres + Redis (for local non-Docker backend dev) |
+| `task run` | run the backend locally against `task infra` |
+| `task test` | unit tests, race detector, `-short` |
+| `task test-integration` | end-to-end tests on real Postgres + Redis (testcontainers) |
+| `task cover` | combined unit+integration coverage report |
+| `task lint` / `task fmt` | golangci-lint / gofmt + go vet |
+| `task migrate` / `task migrate-down` | apply / roll back one DB migration |
+| `task swag` | regenerate the OpenAPI spec from handler annotations |
+
+> The stack boots **without** Jira credentials so you can explore auth and the UI;
 > the Jira integration returns a clear error until `JIRA_CLIENT_ID/SECRET` are set.
 
 ---
@@ -48,7 +80,7 @@ email + password — the tenant is derived from the matched user.
    permission with scopes `read:jira-work`, `write:jira-work`, `read:jira-user`,
    `offline_access`.
 2. Set the **callback URL** to `http://${PUBLIC_HOST}/v1/integrations/jira/callback`.
-   `PUBLIC_HOST` is the public authority (host[:port]) and defaults to
+   `PUBLIC_HOST` is the public authority (`host[:port]`) and defaults to
    `localhost:${FRONTEND_PORT}` (i.e. `localhost:3000`), so local dev only needs
    the port; in prod set a bare domain. The backend derives `JIRA_REDIRECT_URI`
    from it, so the public origin and the OAuth callback can't drift — set it in
@@ -61,6 +93,35 @@ email + password — the tenant is derived from the matched user.
 
 ## Architecture
 
+### System view
+
+The default deployment is three long-lived containers (plus one-shot `migrate`
+and `seed`). The SPA's nginx serves static assets **and** reverse-proxies the API,
+so the browser stays same-origin and `HttpOnly` session cookies work without CORS.
+
+```text
+   browser (SPA, cookie)  ┐
+                          ├─► ┌───────────────┐  /v1/*  ┌───────────────────┐
+   scanner / CI (API key) ┘   │   frontend    │  proxy  │     backend       │
+                              │   nginx :80    ├────────►│   gin :8080       │
+                              │ • serves SPA   │         │  (N stateless     │
+                              │ • /api_docs    │         │   replicas)       │
+                              └───────────────┘         └───┬───────────┬───┘
+                                                            │           │
+                              ┌─────────────────────────────┘           │
+                              ▼                                          ▼
+                   ┌────────────────────┐                  ┌────────────────────┐
+                   │     Postgres 16    │                  │      Redis 7       │
+                   │ users · api_tokens │                  │ sessions · token   │
+                   │ credentials (enc.) │                  │ cache · rate limit │
+                   │ + RLS per tenant   │                  │ oauth state ·      │
+                   └────────────────────┘                  │ ticket cache +     │
+                                                           │ reconcile gate     │
+                   pprof :6060 (internal only)             └────────────────────┘
+
+                   backend ──── OAuth 3LO + REST ────► Jira Cloud (user's own workspace)
+```
+
 ### Two subsystems behind one API, joined by `Identity`
 
 The auth middleware resolves the caller from a **session cookie** or a **Bearer
@@ -69,11 +130,13 @@ it into the request context. **Every protected handler — including all
 integration endpoints — reads tenant/user from `Identity`, never from request
 input.** That value object is the seam between the auth and integration code.
 
-```
-browser ─┐                             ┌─ auth:        sessions, users, API keys
-         ├─ SPA (nginx, proxies /v1)   │
-scanner ─┘   └─ REST ─ api ──Identity──┼─ integration: OAuth, encrypted tokens, reactive refresh
-                                       └─ ticketreport: create ticket, recent-tickets view (Redis cache)
+```text
+                                        ┌─ auth          sessions · users · API keys
+  browser ─┐                            │
+           ├─ SPA (nginx, proxies /v1) ─┤
+  scanner ─┘   └─ REST ── api ──Identity┼─ integration   OAuth · encrypted tokens · reactive refresh
+                                        │
+                                        └─ ticketreport  create ticket · recent-tickets view (Redis) · drift reconcile
 ```
 
 ### Hexagonal, dependency-inverted
@@ -81,21 +144,29 @@ scanner ─┘   └─ REST ─ api ──Identity──┼─ integration: OAu
 Interfaces are **consumer-defined** (each feature package declares the small
 interface it needs); concrete adapters live in `storage/postgres`,
 `storage/redis`, `integration/oauth`, `integration/client`. Wiring happens
-**only** in the composition root (`cmd/api/main.go`). The domain is pure Go.
+**only** in the composition root (`internal/app`, called from `cmd/api`). The
+domain is pure Go with no infra imports.
 
-```
-backend/internal/
-  domain/        # Identity, value objects, sentinel errors (pure)
-  auth/          # Argon2id hasher (alexedwards/argon2id) + user authenticator
-  session/       # opaque server-side sessions (Redis)
-  apitoken/      # OUR machine API keys (hash in PG + Redis cache)
-  integration/   # outbound connection lifecycle (connect/callback/disconnect)
-    oauth/       # JiraOAuthProvider — authentication (3LO authorize/exchange/refresh)
-    client/      # JiraClient — operations on Jira (create issue, list projects)
-    oauthtoken/  # ReactiveTokenManager + AES-256-GCM TokenCipher (PROVIDER tokens)
-  ticketreport/  # NHI business: report finding as ticket; recent-tickets cache + drift reconcile
-  transport/http # gin router, middleware, handlers, DTOs
-  storage/{postgres,redis}, platform, config, logging
+```text
+       transport/http  (gin: router, middleware, handlers, DTOs)
+              │  depends on small consumer-defined interfaces
+              ▼
+   ┌──────────┴───────────┬──────────────────┐
+   │                      │                   │
+  auth              integration         ticketreport         ← feature / service packages
+  session           ├ oauth  (3LO)      (NHI business)
+  apitoken          ├ client (Jira REST)
+                    └ oauthtoken (cipher + reactive refresh)
+   │                      │                   │
+   └──────────┬───────────┴──────────────────┘
+              ▼
+            domain   (Identity, value objects, sentinel errors — pure)
+              ▲
+   ┌──────────┴───────────┐
+   │  storage/postgres    │   storage/redis        ← adapters implementing the ports
+   │  platform (pools,    │   integration/oauth
+   │  server, shutdown)   │   integration/client
+   └──────────────────────┘
 ```
 
 ### Two distinct "token worlds" (kept apart by design)
@@ -111,9 +182,186 @@ They have separate lifecycles, storage, and revocation — never conflated.
 
 App instances are **stateless**; all shared state (sessions, token cache,
 rate-limit counters, OAuth state, the ticket cache + reconcile gate) lives in
-**Redis**, so you can run N replicas behind a load balancer. Validated API keys are Redis-cached to
-avoid a DB hit per request. Postgres uses a tuned `pgxpool`. Graceful shutdown
-drains in-flight requests for clean rolling deploys.
+**Redis**, so you can run N replicas behind a load balancer
+(`docker compose up --scale backend=2`). Validated API keys are Redis-cached to
+avoid a DB hit per request. Postgres uses a tuned `pgxpool` (bounded conns,
+statement + idle-in-tx timeouts). Graceful shutdown drains in-flight requests for
+clean rolling deploys.
+
+---
+
+## Request lifecycles
+
+### 1. Authentication — every request
+
+```text
+  request ─► RequestID ─► SecureHeaders ─► [CORS] ─► RequireAuth ─► CSRF ─► RequireScope ─► handler
+                                                          │
+                                          ┌───────────────┴────────────────┐
+                                          │  ChainIdentityResolver          │
+                                          │   1. Bearer "ih_pat_…"  → Redis │
+                                          │      cache → SHA-256 lookup     │
+                                          │   2. session cookie     → Redis │
+                                          └───────────────┬────────────────┘
+                                                          ▼
+                                          Identity{UserID, TenantID, Scopes, AuthMethod}
+                                                  put on request context
+```
+
+CSRF (double-submit) applies only to **cookie-authenticated** unsafe methods;
+Bearer-key calls (scanners/CI) skip it. Some routes additionally require
+`RequireSessionMethod` (browser-only: login/logout, OAuth, token issue) or
+`RequireScope(integrations:write)`.
+
+### 2. Jira OAuth connect (3LO)
+
+```text
+  user clicks "Connect Jira"
+        │  GET /v1/integrations/jira/connect
+        ▼
+  StartAuthorization: make PKCE verifier+challenge, store one-time `state`
+        │  bound to {tenant,user} in Redis (TTL 10m) → return Atlassian auth URL
+        ▼
+  browser → Atlassian consent → redirect to /v1/integrations/jira/callback?state&code
+        │
+        ▼  GET /v1/integrations/jira/callback   (must carry the session cookie)
+  CompleteAuthorization:
+        consume state  → cross-check {tenant,user} == session Identity   (anti-mix-up)
+        exchange code+verifier → access/refresh tokens (x/oauth2)
+        resolve accessible-resource → cloudid + site URL
+        AES-256-GCM encrypt tokens → store in integration_credentials (status=connected)
+        │
+        └─► fire-and-forget reconcileAsync (detached ctx) so a fresh user
+            immediately sees pre-existing identityhub-tagged tickets
+        ▼
+  302 back to the SPA (?connected=jira)
+```
+
+### 3. Reactive token refresh
+
+No background warmer — a Jira access token is refreshed **only when expired at
+use time**:
+
+```text
+  FetchValidToken(tenant,user):
+    load credential
+      ├─ access token still valid (− skew)?            → return it (no network)
+      ├─ status == needs_reauth, or refresh token
+      │  provably dead (inactivity window passed)?      → ErrReauthRequired → 409
+      └─ otherwise → provider.RefreshTokens
+                       ├─ success → persist rotated refresh token + new expiry → return
+                       └─ invalid_grant / 4xx → mark needs_reauth → ErrReauthRequired → 409
+```
+
+The client surfaces `409 reauth_required` and prompts a reconnect, instead of a
+doomed API call or a retry storm. (A cross-replica single-flight on concurrent
+refreshes — e.g. `SELECT … FOR UPDATE` on the credential row — is the natural
+next step; intentionally left out of this PoC for simplicity.)
+
+### 4. Recent tickets + drift reconciliation
+
+**Jira is the source of truth.** Every ticket IdentityHub creates is tagged with
+an `identityhub` Jira label; the "recent tickets" view is a per-tenant **Redis
+cache** of the Jira label search — so it surfaces tickets created by *any* tenant
+user, and pre-existing ones on a fresh start.
+
+```text
+  create ticket  ─► JiraClient.CreateIssue (append `identityhub` label) ─► cache.Add (prepend)
+
+  refresh (button)  ─► POST …/reconcile (force) ─┐
+  connect (async)   ─► reconcileAsync ───────────┤
+                                                 ▼
+                                    RedisReconcileGate.Begin
+                              ┌──────────────────┴───────────────────┐
+                              │ throttle: skip if reconciled < 30m ago│  (unless forced)
+                              │ single-flight: SET NX lock per tenant │  (collapses a
+                              └──────────────────┬───────────────────┘   burst of connects)
+                                                 ▼
+                              JiraClient.SearchByLabel  (JQL labels="identityhub", paginated)
+                                                 ▼
+                              cache.Replace  (newest N, TTL 24h)
+```
+
+---
+
+## Repository structure
+
+```text
+.
+├── backend/
+│   ├── cmd/api/main.go                 # thin shell → app.Run()
+│   ├── internal/
+│   │   ├── app/                        # composition root: Wire() binds adapters→ports; Serve/Seed
+│   │   ├── domain/                     # Identity, value objects, sentinel errors, scopes (pure)
+│   │   ├── auth/                       # Argon2id hasher (alexedwards/argon2id) + UserAuthenticator
+│   │   ├── session/                    # opaque server-side session manager (Redis-backed)
+│   │   ├── apitoken/                   # OUR machine API keys: issue / authenticate / list / revoke
+│   │   ├── integration/               # outbound connection lifecycle (connect/callback/status/disconnect)
+│   │   │   ├── oauth/                  #   JiraOAuthProvider — 3LO authorize/exchange/refresh (x/oauth2)
+│   │   │   ├── client/                 #   JiraClient — Jira REST ops (create issue, list projects, search-by-label)
+│   │   │   └── oauthtoken/             #   ReactiveTokenManager + AES-256-GCM TokenCipher (PROVIDER tokens)
+│   │   ├── ticketreport/              # NHI business: create ticket, recent-tickets cache, drift reconcile
+│   │   ├── transport/http/            # gin router, middleware, handlers, DTOs, identity resolvers
+│   │   ├── config/                    # viper load + fail-fast validation; centralized keys
+│   │   ├── logging/                   # slog setup + request-id propagation
+│   │   ├── httpconst/, secret/        # shared HTTP header consts; constant-time secret helpers
+│   │   ├── platform/                  # pgxpool, redis client, http server, graceful shutdown, pprof
+│   │   └── storage/
+│   │       ├── postgres/              # tenant/user/apitoken/credential repos (set per-tx tenant GUC)
+│   │       └── redis/                 # session, token cache, rate limit, oauth state, ticket cache, reconcile gate
+│   ├── migrations/                    # golang-migrate SQL (000001_init up/down): tables + RLS + app role + funcs
+│   ├── docs/                          # generated OpenAPI spec (swaggo): docs.go, swagger.{json,yaml}
+│   ├── test/integration/             # testcontainers end-to-end (real PG + Redis, Jira mocked)
+│   └── go.mod
+├── frontend/                          # React + Vite + TS SPA
+│   ├── src/
+│   │   ├── App.tsx, main.tsx          # shell + topbar (Sign out, /api_docs ↗)
+│   │   ├── api.ts, types.ts           # fetch wrapper (CSRF header, error envelope) + DTO types
+│   │   ├── styles.css                 # dark theme via CSS vars
+│   │   └── components/                # Login, Dashboard, TicketsPanel (create + recent + refresh), TokensPanel
+│   ├── nginx.conf                     # serves SPA + proxies /v1|/healthz|/readyz|/api_docs → backend
+│   └── Dockerfile
+├── deployments/docker/
+│   ├── Dockerfile                     # backend: multi-stage, distroless, non-root
+│   └── postgres-initdb.sh             # grants LOGIN+password to the least-privilege app role
+├── docs/superpowers/specs/           # design spec (Jira ticket drift feature)
+├── docker-compose.yml                 # frontend, backend, postgres, redis, migrate, seed (+ env fail-fast)
+├── Taskfile.yml                       # go-task: the single local entrypoint
+├── .env.example                       # documented configuration (copy to .env)
+└── README.md
+```
+
+---
+
+## Data model
+
+Single Postgres database. **Sessions, caches, and rate-limit counters live in
+Redis, not Postgres.** There is **no tickets table** — the recent-tickets view is
+a Redis cache rebuilt from Jira (the source of truth).
+
+```text
+  tenants ──1:N──┬── users ──1:N──┬── api_tokens            (SHA-256 hash, scopes, prefix)
+                 │                 └── integration_credentials (AES-GCM access+refresh, cloudid, status)
+                 │
+  enum connection_status = { connected, needs_reauth, revoked }
+```
+
+| Table | Purpose | RLS | Notable indexes |
+|---|---|---|---|
+| `tenants` | organizations (reference data, read pre-tenant by slug) | — | `UNIQUE(slug)` |
+| `users` | login identities; `email` globally unique | ✓ | `UNIQUE(email)`, `idx_users_tenant_fk` |
+| `api_tokens` | our machine keys | ✓ | `UNIQUE(token_hash)`, `(tenant_id, owner_id, created_at DESC)`, owner FK |
+| `integration_credentials` | encrypted Jira tokens, one per `(tenant,user,provider)` | ✓ | `UNIQUE(tenant_id, user_id, provider)`, user FK |
+
+**Row-Level Security (defense layer 3).** Tenant tables `ENABLE ROW LEVEL
+SECURITY` with `USING (tenant_id = app_current_tenant())`, where
+`app_current_tenant()` reads the per-transaction `app.tenant_id` GUC the
+repositories set from the request `Identity`. When the GUC is unset the policy
+matches no rows (deny-by-default). The app connects as the **non-superuser**
+`identityhub_app` role so RLS actually applies; migrations/admin run as the
+superuser (which bypasses RLS by design — tests rely on this). Two pre-tenant
+bootstrap reads (login-by-email, API-key-by-hash) go through narrow
+`SECURITY DEFINER` functions instead of weakening the policies.
 
 ---
 
@@ -129,25 +377,29 @@ drains in-flight requests for clean rolling deploys.
   persisted. If the *refresh* token is provably dead (inactivity window passed) or
   the provider rejects it (`invalid_grant`), the credential is flipped to
   `needs_reauth` and the client gets a first-class `409 reauth_required` telling it
-  to reconnect — instead of a doomed API call or a retry storm. (A cross-replica
-  single-flight on concurrent refreshes — e.g. a `SELECT … FOR UPDATE` row lock —
-  is the natural next step; it's intentionally left out of this PoC for simplicity.)
+  to reconnect — instead of a doomed API call or a retry storm. (Cross-replica
+  single-flight via a `SELECT … FOR UPDATE` row lock is the natural next step; it's
+  intentionally left out of this PoC for simplicity.)
 - **Defense-in-depth multi-tenancy.** (1) Middleware resolves tenant only from the
   session/token. (2) Every repository query filters by `tenant_id` and is passed
   the tenant explicitly. (3) **Postgres Row-Level Security** denies any row whose
   `tenant_id` ≠ the per-transaction `app.tenant_id` GUC. The app connects as a
   **non-superuser** role so RLS actually applies; migrations/admin use the
-  superuser. The one pre-tenant lookup (API-key-by-hash) goes through a narrow
-  `SECURITY DEFINER` function rather than weakening the policy.
+  superuser. The two pre-tenant lookups (login-by-email, API-key-by-hash) go
+  through narrow `SECURITY DEFINER` functions rather than weakening the policy.
 - **Secrets handled carefully.** Passwords: Argon2id (~64 MiB, t=3, p=4) via the
-  maintained `alexedwards/argon2id`. Jira
-  tokens: AES-256-GCM at rest (random nonce per encryption, tamper-detected). API
-  keys: only the SHA-256 hash is stored; the plaintext is shown **once**.
-  Constant-time comparisons for secrets. OAuth `state` is one-time, bound to
-  `{tenant,user}`, **and** cross-checked against the session identity on callback
-  (defends the "callback bound to the wrong user" class of attack); PKCE (S256) is
-  used. Rate limiting on login. `pprof` runs on a separate internal port. Secrets
-  never appear in logs (only token IDs/prefixes and tenant/user IDs).
+  maintained `alexedwards/argon2id`. Jira tokens: AES-256-GCM at rest (random
+  nonce per encryption, tamper-detected). API keys: only the SHA-256 hash is
+  stored; the plaintext is shown **once**. Constant-time comparisons for secrets.
+  OAuth `state` is one-time, bound to `{tenant,user}`, **and** cross-checked
+  against the session identity on callback (defends the "callback bound to the
+  wrong user" class of attack); PKCE (S256) is used. Rate limiting on login
+  (GCRA via `go-redis/redis_rate`). `pprof` runs on a separate internal-only port.
+  Secrets never appear in logs (only token IDs/prefixes and tenant/user IDs).
+- **Jira is the source of truth for tickets.** Rather than a Postgres mirror that
+  can drift, the recent-tickets view is a Redis cache rebuilt from a Jira label
+  search — self-healing, and naturally discovers tickets created by other tenant
+  users or before the app existed.
 
 ---
 
@@ -155,6 +407,8 @@ drains in-flight requests for clean rolling deploys.
 
 Interactive docs (Swagger UI) live at **http://localhost:3000/api_docs/index.html** —
 the OpenAPI spec is generated from handler annotations (`task swag` to regenerate).
+Browser/session-only flows (login/logout, OAuth connect/callback) are intentionally
+excluded from the spec, which documents the **machine-consumable** API.
 
 Issue an API key in the UI (**API keys → Manage**), then:
 
@@ -171,32 +425,62 @@ curl -X POST http://localhost:3000/v1/integrations/jira/tickets \
 | `POST /v1/auth/logout` | session | revoke session |
 | `GET /v1/auth/me` | session \| key | current identity |
 | `POST /v1/tokens` | session | issue API key (plaintext once) |
-| `GET/DELETE /v1/tokens[/{id}]` | session \| key | list / revoke keys |
-| `GET /v1/integrations/jira/connect` | session | start OAuth |
-| `GET /v1/integrations/jira/callback` | session | finish OAuth |
+| `GET /v1/tokens` | session \| key | list keys (metadata only) |
+| `DELETE /v1/tokens/{id}` | session \| key | revoke key |
+| `GET /v1/integrations` | session \| key | list integrations (connection status) |
+| `GET /v1/integrations/jira/connect` | session | start OAuth (browser flow) |
+| `GET /v1/integrations/jira/callback` | session | finish OAuth (browser redirect) |
 | `GET /v1/integrations/jira/status` | session \| key | connection status |
-| `GET /v1/integrations/jira/projects` | session \| key | list projects |
+| `GET /v1/integrations/jira/projects` | session \| key | list projects (picker) |
 | `POST /v1/integrations/jira/tickets` | session \| key:`integrations:write` | create finding (tagged `identityhub`) |
 | `GET /v1/integrations/jira/tickets?project=KEY` | session \| key | recent tickets (cached) |
 | `POST /v1/integrations/jira/reconcile` | session \| key | refresh the cache from Jira (drift) |
 | `DELETE /v1/integrations/jira` | session \| key:`integrations:write` | disconnect |
 | `GET /healthz`, `/readyz` | public | liveness / readiness |
 
-Errors use a uniform envelope; a `409 reauth_required` signals the integration
-must be reconnected (call `/connect` again).
+Errors use a uniform envelope `{"error":"code","message":"..."}`; a
+`409 reauth_required` signals the integration must be reconnected (call
+`/connect` again).
+
+---
+
+## Configuration reference
+
+All config is loaded by viper: defaults → optional config file (`CONFIG_FILE`) →
+env vars (env wins). Nested keys map to `UPPER_SNAKE` (e.g. `postgres.host` →
+`POSTGRES_HOST`). Copy `.env.example` to `.env` and fill in secrets. Highlights:
+
+| Group | Vars | Notes |
+|---|---|---|
+| **Runtime** | `ENV`, `LOG_LEVEL` | `dev` (text logs) / `prod` (JSON) |
+| **HTTP** | `HTTP_ADDR`, `HTTP_ALLOWED_ORIGINS`, `PPROF_ENABLED`, `PPROF_ADDR` | pprof on its own internal port |
+| **Postgres (admin)** | `PG_SUPERUSER`, `PG_SUPERUSER_PASSWORD`, `PG_DB`, `APP_DB_PASSWORD` | superuser runs migrations; app role gets `APP_DB_PASSWORD` |
+| **Postgres (app conn)** | `POSTGRES_HOST/PORT/USER/PASSWORD/DB`, `POSTGRES_SSLMODE`, `POSTGRES_MAX_CONNS` | `USER` = least-privilege role; `PASSWORD` must equal `APP_DB_PASSWORD` |
+| **Redis** | `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_DB` | all shared state |
+| **Sessions** | `SESSION_TTL`, `SESSION_ABSOLUTE_TTL`, `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE` | set `SECURE=true` behind TLS |
+| **Crypto** | `CRYPTO_TOKEN_KEY` | base64 32-byte key — `openssl rand -base64 32` |
+| **API keys** | `API_TOKEN_PREFIX`, `API_TOKEN_CACHE_TTL` | plaintext prefix + Redis cache TTL |
+| **Rate limit** | `RATELIMIT_LOGIN_MAX`, `RATELIMIT_LOGIN_WINDOW` | per-IP and per-account on login |
+| **Jira 3LO** | `JIRA_CLIENT_ID/SECRET`, `JIRA_REDIRECT_URI`, `JIRA_SCOPES`, `JIRA_AUTH_URL`, `JIRA_TOKEN_URL`, `JIRA_API_BASE_URL`, `JIRA_USE_PKCE`, `JIRA_INACTIVITY_WINDOW`, `JIRA_ACCESS_TOKEN_SKEW` | redirect URI is derived from `PUBLIC_HOST` unless set |
+| **Seed** | `SEED_ORG_SLUG/NAME`, `SEED_USER_EMAIL/PASSWORD` | the first org + login |
+| **Public origin** | `PUBLIC_HOST`, `FRONTEND_PORT` | callback derives from these |
+
+The mandatory secrets are **fail-fast**: `docker compose up` aborts before any
+container starts if `POSTGRES_USER/PASSWORD/DB`, `REDIS_PASSWORD`,
+`CRYPTO_TOKEN_KEY`, or the `PG_*`/`APP_DB_PASSWORD` admin vars are unset.
 
 ---
 
 ## Adding another provider (3 steps)
 
 The core (`integration`, `ticketreport`, `transport`) depends only on small
-consumer-defined ports (the auth provider and the operations `Client`). To add
+consumer-defined ports (the OAuth provider and the operations `Client`). To add
 e.g. GitHub:
 
 1. Implement `XxxOAuthProvider` in `integration/oauth` and `XxxClient` in
    `integration/client`.
 2. Add its config block.
-3. Register it in the composition root.
+3. Register it in the composition root (`internal/app`).
 
 No changes to the orchestration, token manager, or transport. (This PoC ships
 Jira only by choice; the seams are there.)
@@ -208,12 +492,13 @@ Jira only by choice; the seams are there.)
 ```bash
 task test               # unit tests, table-driven + AAA, race detector
 task test-integration   # end-to-end against real Postgres + Redis (testcontainers), Jira mocked
+task cover              # combined statement coverage
 ```
 
 Integration tests cover: login→session→logout; API-key issue→use→revoke; the full
 Jira flow (connect→callback with state+identity cross-check→**encrypted**
-credential→create ticket→recent tickets→disconnect); the reauth/reconnect flow;
-and multi-tenant isolation proven at the repository **and** RLS layers.
+credential→create ticket→recent tickets→reconcile→disconnect); the reauth/reconnect
+flow; and multi-tenant isolation proven at the repository **and** RLS layers.
 
 ---
 
@@ -224,14 +509,14 @@ and multi-tenant isolation proven at the repository **and** RLS layers.
   `SECURITY DEFINER` function (`find_user_for_login`) — the same pattern as the
   API-key-by-hash lookup — so RLS stays enforced for everything else. Demo org
   `acme` + user are seeded.
-- **"Recent tickets" + drift reconciliation.** Every ticket IdentityHub creates
-  is tagged with an `identityhub` Jira label. **Jira is the source of truth**: the
-  recent-tickets view is a per-tenant **Redis cache** (TTL) of the Jira label
-  search, so it discovers tickets created by *any* tenant user (and pre-existing
-  ones on a fresh start). The cache is reconciled usage-driven — async on connect
-  and via an explicit refresh (`POST …/reconcile`) — throttled + single-flighted
-  by a Redis gate so a burst of connects collapses to one reconcile. (There is no
-  Postgres tickets table; the cache self-heals from Jira.)
+- **"Recent tickets" + drift reconciliation.** Every ticket IdentityHub creates is
+  tagged `identityhub`. **Jira is the source of truth**: the recent-tickets view
+  is a per-tenant **Redis cache** (TTL) of the Jira label search, so it discovers
+  tickets created by *any* tenant user (and pre-existing ones on a fresh start).
+  The cache is reconciled usage-driven — async on connect and via an explicit
+  refresh (`POST …/reconcile`) — throttled + single-flighted by a Redis gate so a
+  burst of connects collapses to one reconcile. (No Postgres tickets table; the
+  cache self-heals from Jira.)
 - Single role model (scopes only, no RBAC) for the PoC.
 - Tests mock Jira via base-URL override; local/real runs use a Jira 3LO app.
 - The default deployment serves the SPA same-origin via the frontend's nginx
@@ -244,3 +529,4 @@ and multi-tenant isolation proven at the repository **and** RLS layers.
   files a Jira ticket per post into a chosen project. Automations are tenant-shared
   and use the creator's Jira credential; processed URLs are tracked in Redis so each
   post is filed once. See `docs/superpowers/specs/2026-06-06-nhi-automation-blog-digest-design.md`.
+```

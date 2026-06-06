@@ -2,8 +2,9 @@
 -- Multi-tenancy is enforced in depth: every tenant table carries tenant_id,
 -- repositories scope every query by tenant (layer 2), and Row-Level Security
 -- (layer 3) denies any row whose tenant_id != the per-transaction GUC
--- `app.tenant_id`. RLS is FORCED so even the table owner (the app role) is
--- subject to it.
+-- `app.tenant_id`. RLS is ENABLEd (not FORCEd): the app connects as a
+-- non-superuser, non-owner role, so the policy applies to it; the superuser/owner
+-- (migrations, admin, tests) bypasses RLS by design.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
