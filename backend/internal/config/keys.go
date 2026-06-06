@@ -72,4 +72,17 @@ const (
 	keyJiraAbsoluteWindow      = "jira.absolute_window"
 	keyJiraAccessTokenSkew     = "jira.access_token_skew"
 	keyJiraHTTPTimeout         = "jira.http_timeout"
+
+	keyOllamaBaseURL       = "ollama.base_url"
+	keyOllamaModel         = "ollama.model"
+	keyOllamaTimeout       = "ollama.timeout"
+	keyOllamaMaxInputChars = "ollama.max_input_chars"
+
+	keySchedulerTick       = "scheduler.tick"
+	keySchedulerClaimBatch = "scheduler.claim_batch"
+	keySchedulerLease      = "scheduler.lease"
+
+	keyAutomationMaxPostsPerRun  = "automation.max_posts_per_run"
+	keyAutomationDefaultInterval = "automation.default_interval"
+	keyAutomationHTTPTimeout     = "automation.http_timeout"
 )
