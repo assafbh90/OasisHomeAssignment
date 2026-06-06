@@ -5,14 +5,20 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 
 	"github.com/assafbh/identityhub/internal/domain"
+	"github.com/assafbh/identityhub/internal/logging"
 )
 
-const recentTicketsLimit = 10
+const (
+	recentTicketsLimit = 10
+	// reconcileTimeout bounds the async post-connect reconcile.
+	reconcileTimeout = 30 * time.Second
+)
 
 // connectionService is the slice of the integration ConnectionService the
 // handler needs. Provider is implicit (Jira-only) — validated by middleware.
@@ -28,6 +34,7 @@ type reportService interface {
 	ListProjects(ctx context.Context, principal domain.Identity) ([]domain.ProjectRef, error)
 	CreateTicket(ctx context.Context, principal domain.Identity, payload domain.TicketPayload) (domain.TicketRef, error)
 	ListRecentTickets(ctx context.Context, principal domain.Identity, projectKey string, limit int) ([]domain.CreatedTicket, error)
+	Reconcile(ctx context.Context, principal domain.Identity, force bool) error
 }
 
 // IntegrationHandler serves the Jira integration endpoints. It never branches on
@@ -96,7 +103,34 @@ func (h *IntegrationHandler) Callback(c *gin.Context) {
 		c.Redirect(http.StatusFound, h.redirectURL("connect_error", "1"))
 		return
 	}
+	// Refresh the tenant's ticket cache from Jira after connecting (async,
+	// throttled by the gate), so a fresh user immediately sees existing tickets.
+	h.reconcileAsync(c.Request.Context(), id)
 	c.Redirect(http.StatusFound, h.redirectURL("connected", domain.ProviderJira))
+}
+
+// Reconcile forces a refresh of the tenant's ticket cache from Jira (the refresh
+// button). It is single-flighted by the gate; reauth needs surface as 409.
+func (h *IntegrationHandler) Reconcile(c *gin.Context) {
+	id, _ := mustIdentity(c)
+	if err := h.reports.Reconcile(c.Request.Context(), id, true); err != nil {
+		h.respondIntegrationError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// reconcileAsync runs a throttled reconcile in the background on a detached
+// context, so it survives the OAuth callback's redirect.
+func (h *IntegrationHandler) reconcileAsync(reqCtx context.Context, id domain.Identity) {
+	ctx := context.WithoutCancel(reqCtx)
+	go func() {
+		ctx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+		defer cancel()
+		if err := h.reports.Reconcile(ctx, id, false); err != nil {
+			logging.FromContext(ctx).Warn("post-connect reconcile failed", logging.Err(err))
+		}
+	}()
 }
 
 // Status describes the current connection.

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,8 +29,12 @@ const (
 	pathAPIPrefix     = "/ex/jira/"
 	pathCreateIssue   = "/rest/api/3/issue"
 	pathProjectSearch = "/rest/api/3/project/search?maxResults=100"
-	pathMyself        = "/rest/api/3/myself"
+	pathSearch        = "/rest/api/3/search/jql"
 	browsePath        = "/browse/"
+
+	// searchPageSize/maxTickets bound the label search (drift reconciliation).
+	searchPageSize = 100
+	maxTickets     = 200
 
 	// errSnippetLimit caps how much of an error response body we include in messages.
 	errSnippetLimit = 512
@@ -60,9 +66,6 @@ func NewJiraClient(apiBaseURL string, httpTimeout time.Duration) *JiraClient {
 	return &JiraClient{apiBaseURL: apiBaseURL, http: &http.Client{Timeout: httpTimeout}}
 }
 
-// Name returns the provider key.
-func (c *JiraClient) Name() string { return domain.ProviderJira }
-
 // CreateIssue creates a Jira issue from the generic payload and returns a ref
 // with a clickable browse URL.
 func (c *JiraClient) CreateIssue(ctx context.Context, auth domain.ClientAuth, payload domain.TicketPayload) (domain.TicketRef, error) {
@@ -74,9 +77,8 @@ func (c *JiraClient) CreateIssue(ctx context.Context, auth domain.ClientAuth, pa
 	if desc := strings.TrimSpace(payload.Description); desc != "" {
 		fields["description"] = adfDoc(desc)
 	}
-	if labels := sanitizeLabels(payload.Labels); len(labels) > 0 {
-		fields["labels"] = labels
-	}
+	// Always tag with the IdentityHub label so the set is discoverable by search.
+	fields["labels"] = withIdentityHubLabel(sanitizeLabels(payload.Labels))
 
 	var out struct {
 		ID  string `json:"id"`
@@ -112,9 +114,80 @@ func (c *JiraClient) ListProjects(ctx context.Context, auth domain.ClientAuth) (
 	return projects, nil
 }
 
-// VerifyConnection checks the token works by calling the current-user endpoint.
-func (c *JiraClient) VerifyConnection(ctx context.Context, auth domain.ClientAuth) error {
-	return c.doJSON(ctx, http.MethodGet, auth, pathMyself, nil, nil)
+type searchResponse struct {
+	Issues []struct {
+		Key    string `json:"key"`
+		Fields struct {
+			Summary string `json:"summary"`
+			Created string `json:"created"`
+			Project struct {
+				Key string `json:"key"`
+			} `json:"project"`
+		} `json:"fields"`
+	} `json:"issues"`
+	NextPageToken string `json:"nextPageToken"`
+	IsLast        bool   `json:"isLast"`
+}
+
+// SearchByLabel returns the IdentityHub-labelled issues on the connected site,
+// newest first, paginated and bounded to maxTickets. This is the drift-
+// reconciliation primitive: it finds every IdentityHub ticket regardless of who
+// created it.
+func (c *JiraClient) SearchByLabel(ctx context.Context, auth domain.ClientAuth) ([]domain.ProviderTicket, error) {
+	jql := fmt.Sprintf("labels = %q ORDER BY created DESC", domain.IdentityHubLabel)
+	var (
+		tickets   []domain.ProviderTicket
+		pageToken string
+	)
+	for len(tickets) < maxTickets {
+		q := url.Values{}
+		q.Set("jql", jql)
+		q.Set("maxResults", strconv.Itoa(searchPageSize))
+		q.Set("fields", "summary,created,project")
+		if pageToken != "" {
+			q.Set("nextPageToken", pageToken)
+		}
+
+		var page searchResponse
+		if err := c.doJSON(ctx, http.MethodGet, auth, pathSearch+"?"+q.Encode(), nil, &page); err != nil {
+			return nil, err
+		}
+		for _, iss := range page.Issues {
+			tickets = append(tickets, domain.ProviderTicket{
+				IssueKey:   iss.Key,
+				Title:      iss.Fields.Summary,
+				ProjectKey: iss.Fields.Project.Key,
+				URL:        issueURL(auth.SiteURL, iss.Key),
+				CreatedAt:  parseJiraTime(iss.Fields.Created),
+			})
+		}
+		if page.IsLast || page.NextPageToken == "" || len(page.Issues) == 0 {
+			break
+		}
+		pageToken = page.NextPageToken
+	}
+	return tickets, nil
+}
+
+// withIdentityHubLabel appends the IdentityHub label if not already present.
+func withIdentityHubLabel(labels []string) []string {
+	for _, l := range labels {
+		if l == domain.IdentityHubLabel {
+			return labels
+		}
+	}
+	return append(labels, domain.IdentityHubLabel)
+}
+
+// parseJiraTime parses Jira's timestamp format (e.g. 2026-06-06T12:00:00.000-0700),
+// falling back to RFC3339; a zero time on failure is acceptable for display.
+func parseJiraTime(s string) time.Time {
+	for _, layout := range []string{"2006-01-02T15:04:05.000-0700", time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // apiBase returns the per-tenant Jira API base for a cloudid.

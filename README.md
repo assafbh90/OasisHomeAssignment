@@ -73,7 +73,7 @@ input.** That value object is the seam between the auth and integration code.
 browser ─┐                             ┌─ auth:        sessions, users, API keys
          ├─ SPA (nginx, proxies /v1)   │
 scanner ─┘   └─ REST ─ api ──Identity──┼─ integration: OAuth, encrypted tokens, reactive refresh
-                                       └─ finding:     create ticket, recent-tickets view
+                                       └─ ticketreport: create ticket, recent-tickets view (Redis cache)
 ```
 
 ### Hexagonal, dependency-inverted
@@ -93,7 +93,7 @@ backend/internal/
     oauth/       # JiraOAuthProvider — authentication (3LO authorize/exchange/refresh)
     client/      # JiraClient — operations on Jira (create issue, list projects)
     oauthtoken/  # ReactiveTokenManager + AES-256-GCM TokenCipher (PROVIDER tokens)
-  ticketreport/  # NHI business: report finding as ticket, recent tickets, created_tickets
+  ticketreport/  # NHI business: report finding as ticket; recent-tickets cache + drift reconcile
   transport/http # gin router, middleware, handlers, DTOs
   storage/{postgres,redis}, platform, config, logging
 ```
@@ -110,8 +110,8 @@ They have separate lifecycles, storage, and revocation — never conflated.
 ### Scalability
 
 App instances are **stateless**; all shared state (sessions, token cache,
-rate-limit counters, OAuth state, pending actions) lives in **Redis**, so you can
-run N replicas behind a load balancer. Validated API keys are Redis-cached to
+rate-limit counters, OAuth state, the ticket cache + reconcile gate) lives in
+**Redis**, so you can run N replicas behind a load balancer. Validated API keys are Redis-cached to
 avoid a DB hit per request. Postgres uses a tuned `pgxpool`. Graceful shutdown
 drains in-flight requests for clean rolling deploys.
 
@@ -173,8 +173,9 @@ curl -X POST http://localhost:3000/v1/integrations/jira/tickets \
 | `GET /v1/integrations/jira/callback` | session | finish OAuth |
 | `GET /v1/integrations/jira/status` | session \| key | connection status |
 | `GET /v1/integrations/jira/projects` | session \| key | list projects |
-| `POST /v1/integrations/jira/tickets` | session \| key:`integrations:write` | create finding |
-| `GET /v1/integrations/jira/tickets?project=KEY` | session \| key | recent tickets |
+| `POST /v1/integrations/jira/tickets` | session \| key:`integrations:write` | create finding (tagged `identityhub`) |
+| `GET /v1/integrations/jira/tickets?project=KEY` | session \| key | recent tickets (cached) |
+| `POST /v1/integrations/jira/reconcile` | session \| key | refresh the cache from Jira (drift) |
 | `DELETE /v1/integrations/jira` | session \| key:`integrations:write` | disconnect |
 | `GET /healthz`, `/readyz` | public | liveness / readiness |
 
@@ -220,8 +221,14 @@ and multi-tenant isolation proven at the repository **and** RLS layers.
   `SECURITY DEFINER` function (`find_user_for_login`) — the same pattern as the
   API-key-by-hash lookup — so RLS stays enforced for everything else. Demo org
   `acme` + user are seeded.
-- **"Recent tickets"** lists tickets *created through IdentityHub* (tracked in
-  `created_tickets`), per project — not a live Jira search.
+- **"Recent tickets" + drift reconciliation.** Every ticket IdentityHub creates
+  is tagged with an `identityhub` Jira label. **Jira is the source of truth**: the
+  recent-tickets view is a per-tenant **Redis cache** (TTL) of the Jira label
+  search, so it discovers tickets created by *any* tenant user (and pre-existing
+  ones on a fresh start). The cache is reconciled usage-driven — async on connect
+  and via an explicit refresh (`POST …/reconcile`) — throttled + single-flighted
+  by a Redis gate so a burst of connects collapses to one reconcile. (There is no
+  Postgres tickets table; the cache self-heals from Jira.)
 - Single role model (scopes only, no RBAC) for the PoC.
 - Tests mock Jira via base-URL override; local/real runs use a Jira 3LO app.
 - The default deployment serves the SPA same-origin via the frontend's nginx

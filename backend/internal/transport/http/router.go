@@ -1,3 +1,6 @@
+// Package http contains the gin router, middleware, request/response DTOs, and
+// HTTP handlers. It is the only layer that knows about gin. Handlers read the
+// authenticated Identity from the request context — never from request input.
 package http
 
 import (
@@ -68,6 +71,7 @@ func registerIntegrationRoutes(v1 *gin.RouterGroup, h *IntegrationHandler) {
 			p.GET("/projects", h.ListProjects)
 			p.GET("/tickets", h.ListRecentTickets)
 			p.POST("/tickets", RequireScope(domain.ScopeIntegrationsWrite), h.CreateTicket)
+			p.POST("/reconcile", h.Reconcile)
 			p.DELETE("", RequireScope(domain.ScopeIntegrationsWrite), h.Disconnect)
 		}
 	}

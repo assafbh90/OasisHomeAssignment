@@ -108,17 +108,20 @@ func TestJiraEndToEnd(t *testing.T) {
 	// credential is encrypted at rest (raw bytes != plaintext token)
 	assertCredentialEncrypted(t)
 
-	// create a ticket
+	// create a ticket (tagged with the identityhub label)
 	resp = c.do(http.MethodPost, "/v1/integrations/jira/tickets", "", map[string]any{"project_key": "NHI", "title": "Stale Service Account"})
 	require.Equal(t, http.StatusCreated, resp.Code())
 	require.Equal(t, "NHI-1", decode[map[string]string](t, resp)["issue_key"])
 
-	// recent tickets shows it
-	resp = c.do(http.MethodGet, "/v1/integrations/jira/tickets?project=NHI", "", nil)
-	require.Equal(t, http.StatusOK, resp.Code())
-	tickets := decode[map[string][]map[string]any](t, resp)["tickets"]
-	require.Len(t, tickets, 1)
-	require.Equal(t, "NHI-1", tickets[0]["issue_key"])
+	// recent tickets shows it. The cache is a reconcile of the Jira label search
+	// (eventually consistent vs. the async on-connect reconcile), so force a
+	// refresh and poll until it appears.
+	require.Eventually(t, func() bool {
+		c.do(http.MethodPost, "/v1/integrations/jira/reconcile", "", nil)
+		r := c.do(http.MethodGet, "/v1/integrations/jira/tickets?project=NHI", "", nil)
+		tickets := decode[map[string][]map[string]any](t, r)["tickets"]
+		return len(tickets) == 1 && tickets[0]["issue_key"] == "NHI-1"
+	}, 3*time.Second, 50*time.Millisecond)
 
 	// disconnect, then creating a ticket reports not-connected
 	require.Equal(t, http.StatusNoContent, c.do(http.MethodDelete, "/v1/integrations/jira", "", nil).Code())
@@ -213,6 +216,30 @@ func countCredsUnderTenant(t *testing.T, tenantID uuid.UUID) int {
 	var n int
 	require.NoError(t, tx.QueryRow(ctx, "SELECT count(*) FROM integration_credentials").Scan(&n))
 	return n
+}
+
+// TestDiscoveryOnConnect: a fresh user connects a Jira site that already has an
+// IdentityHub-labelled ticket (created by someone else); reconcile discovers it.
+func TestDiscoveryOnConnect(t *testing.T) {
+	e := newEnv(t)
+	_, email, password, _, _ := e.seedUser(t)
+	e.jira.seedIssue("NHI-99") // pre-existing on the site, not created by this user
+	srv := httptest.NewServer(e.handler)
+	defer srv.Close()
+	c := newClient(t, srv)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/v1/auth/login", "", loginBody(email, password)).Code())
+
+	authURL := decode[map[string]string](t, c.do(http.MethodGet, "/v1/integrations/jira/connect", "", nil))["auth_url"]
+	state := extractQuery(t, authURL, "state")
+	require.Equal(t, http.StatusFound,
+		c.do(http.MethodGet, "/v1/integrations/jira/callback?state="+url.QueryEscape(state)+"&code=fake", "", nil).Code())
+
+	require.Eventually(t, func() bool {
+		c.do(http.MethodPost, "/v1/integrations/jira/reconcile", "", nil)
+		r := c.do(http.MethodGet, "/v1/integrations/jira/tickets?project=NHI", "", nil)
+		tickets := decode[map[string][]map[string]any](t, r)["tickets"]
+		return len(tickets) == 1 && tickets[0]["issue_key"] == "NHI-99"
+	}, 3*time.Second, 50*time.Millisecond)
 }
 
 func countCredsNoTenant(t *testing.T) int {

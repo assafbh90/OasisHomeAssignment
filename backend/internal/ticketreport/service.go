@@ -1,11 +1,12 @@
-// Package ticketreport holds the NHI business logic: reporting findings as
-// tickets, listing target projects, and the recent-tickets view. It depends on
-// the integration subsystem for a valid token + connector, but owns the
-// created_tickets domain.
+// Package ticketreport holds the NHI business logic: reporting findings as Jira
+// tickets, listing target projects, the recent-tickets view, and reconciling the
+// tenant's ticket cache against Jira (the source of truth). It depends on the
+// integration subsystem for a valid token + a provider client.
 package ticketreport
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -23,16 +24,25 @@ type CredentialReader interface {
 	LoadCredential(ctx context.Context, tenantID, userID uuid.UUID, provider string) (*domain.Credential, error)
 }
 
-// Client performs the provider operations the reporter needs.
+// Client performs the provider operations the reporter needs. SearchByLabel
+// returns every IdentityHub-labelled ticket on the connected site (discovery).
 type Client interface {
 	CreateIssue(ctx context.Context, auth domain.ClientAuth, payload domain.TicketPayload) (domain.TicketRef, error)
 	ListProjects(ctx context.Context, auth domain.ClientAuth) ([]domain.ProjectRef, error)
+	SearchByLabel(ctx context.Context, auth domain.ClientAuth) ([]domain.ProviderTicket, error)
 }
 
-// TicketRepository persists/reads app-created tickets.
-type TicketRepository interface {
-	SaveTicket(ctx context.Context, t *domain.CreatedTicket) error
-	ListRecentByProject(ctx context.Context, tenantID, userID uuid.UUID, projectKey string, limit int) ([]domain.CreatedTicket, error)
+// TicketCache is the tenant-scoped cache of IdentityHub tickets (Redis).
+type TicketCache interface {
+	Replace(ctx context.Context, tenantID uuid.UUID, tickets []domain.CreatedTicket) error
+	Add(ctx context.Context, tenantID uuid.UUID, ticket domain.CreatedTicket) error
+	ListByProject(ctx context.Context, tenantID uuid.UUID, projectKey string, limit int) ([]domain.CreatedTicket, error)
+}
+
+// ReconcileGate throttles + single-flights reconciliation per tenant. Begin
+// reports whether to proceed; finish releases the lock and stamps the throttle.
+type ReconcileGate interface {
+	Begin(ctx context.Context, tenantID uuid.UUID, force bool) (proceed bool, finish func(), err error)
 }
 
 // Service implements the NHI finding-ticket use cases.
@@ -41,25 +51,27 @@ type Service struct {
 	tokens   TokenManager
 	creds    CredentialReader
 	client   Client
-	tickets  TicketRepository
+	cache    TicketCache
+	gate     ReconcileGate
 }
 
-// Deps are the collaborators of a Service. Passing them as a struct
-// (rather than a long positional parameter list) keeps call sites self-documenting
-// and makes it impossible to silently transpose the several same-typed deps.
+// Deps are the collaborators of a Service. Passing them as a struct (rather than
+// a long positional parameter list) keeps call sites self-documenting and makes
+// it impossible to silently transpose the several same-typed deps.
 type Deps struct {
 	Provider string
 	Tokens   TokenManager
 	Creds    CredentialReader
 	Client   Client
-	Tickets  TicketRepository
+	Cache    TicketCache
+	Gate     ReconcileGate
 }
 
 // NewService constructs the service from its dependencies.
 func NewService(d Deps) *Service {
 	return &Service{
 		provider: d.Provider, tokens: d.Tokens, creds: d.Creds,
-		client: d.Client, tickets: d.Tickets,
+		client: d.Client, cache: d.Cache, gate: d.Gate,
 	}
 }
 
@@ -73,8 +85,9 @@ func (s *Service) ListProjects(ctx context.Context, principal domain.Identity) (
 	return s.client.ListProjects(ctx, auth)
 }
 
-// CreateTicket creates an NHI finding ticket and records it for the recent view.
-// It returns domain.ErrReauthRequired when the connection needs reconnecting.
+// CreateTicket creates an NHI finding ticket (tagged with the IdentityHub label)
+// and adds it to the cache so it shows immediately. It returns
+// domain.ErrReauthRequired when the connection needs reconnecting.
 func (s *Service) CreateTicket(ctx context.Context, principal domain.Identity, payload domain.TicketPayload) (domain.TicketRef, error) {
 	auth, err := s.resolveAuth(ctx, principal)
 	if err != nil {
@@ -86,27 +99,64 @@ func (s *Service) CreateTicket(ctx context.Context, principal domain.Identity, p
 		return domain.TicketRef{}, err
 	}
 
-	ticket := &domain.CreatedTicket{
+	ticket := domain.CreatedTicket{
 		TenantID:   principal.TenantID,
-		UserID:     principal.UserID,
 		Provider:   s.provider,
 		ProjectKey: payload.ProjectKey,
 		IssueKey:   ref.IssueKey,
 		IssueURL:   ref.URL,
 		Title:      payload.Title,
+		CreatedAt:  time.Now(),
 	}
-	if err := s.tickets.SaveTicket(ctx, ticket); err != nil {
-		// The ticket exists in the provider; failing to record it locally only
-		// affects the recent-tickets view. Log and return the ref.
-		logging.FromContext(ctx).Error("save created ticket failed", logging.Err(err))
+	if err := s.cache.Add(ctx, principal.TenantID, ticket); err != nil {
+		// The ticket exists in Jira; failing to cache it only delays it appearing
+		// in the recent view until the next reconcile. Log and return the ref.
+		logging.FromContext(ctx).Warn("cache created ticket failed", logging.Err(err))
 	}
 	return ref, nil
 }
 
-// ListRecentTickets returns app-created tickets for a project from local storage
-// (no provider call).
+// ListRecentTickets returns the tenant's cached IdentityHub tickets for a project
+// (no provider call). The cache is kept fresh by Reconcile.
 func (s *Service) ListRecentTickets(ctx context.Context, principal domain.Identity, projectKey string, limit int) ([]domain.CreatedTicket, error) {
-	return s.tickets.ListRecentByProject(ctx, principal.TenantID, principal.UserID, projectKey, limit)
+	return s.cache.ListByProject(ctx, principal.TenantID, projectKey, limit)
+}
+
+// Reconcile refreshes the tenant's ticket cache from Jira's IdentityHub label
+// search (Jira is the source of truth). It is throttled + single-flighted by the
+// gate; when skipped it returns nil. force bypasses the throttle (refresh button).
+func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, force bool) error {
+	proceed, finish, err := s.gate.Begin(ctx, principal.TenantID, force)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		return nil // reconciled recently, or another reconcile is in flight
+	}
+	defer finish()
+
+	auth, err := s.resolveAuth(ctx, principal)
+	if err != nil {
+		return err
+	}
+	found, err := s.client.SearchByLabel(ctx, auth)
+	if err != nil {
+		return err
+	}
+
+	tickets := make([]domain.CreatedTicket, 0, len(found))
+	for _, t := range found {
+		tickets = append(tickets, domain.CreatedTicket{
+			TenantID:   principal.TenantID,
+			Provider:   s.provider,
+			ProjectKey: t.ProjectKey,
+			IssueKey:   t.IssueKey,
+			IssueURL:   t.URL,
+			Title:      t.Title,
+			CreatedAt:  t.CreatedAt,
+		})
+	}
+	return s.cache.Replace(ctx, principal.TenantID, tickets)
 }
 
 // resolveAuth fetches a valid token + credential and assembles ClientAuth.

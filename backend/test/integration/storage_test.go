@@ -24,7 +24,7 @@ import (
 func truncateAll(t *testing.T) {
 	t.Helper()
 	_, err := adminPool.Exec(context.Background(),
-		`TRUNCATE tenants, users, api_tokens, integration_credentials, created_tickets RESTART IDENTITY CASCADE`)
+		`TRUNCATE tenants, users, api_tokens, integration_credentials RESTART IDENTITY CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, redisClient.FlushDB(context.Background()).Err())
 }
@@ -175,6 +175,45 @@ func TestRedisStores(t *testing.T) {
 		require.Equal(t, "verifier", v)
 		_, _, _, err = ss.ConsumeState(ctx, state) // second use fails
 		require.ErrorIs(t, err, domain.ErrStateNotFound)
+	})
+
+	t.Run("ticket cache", func(t *testing.T) {
+		cache := redisstore.NewRedisTicketCache(redisClient, time.Minute)
+		tid := uuid.New()
+		require.NoError(t, cache.Replace(ctx, tid, []domain.CreatedTicket{
+			{TenantID: tid, Provider: "jira", ProjectKey: "NHI", IssueKey: "NHI-1", CreatedAt: time.Now()},
+			{TenantID: tid, Provider: "jira", ProjectKey: "OPS", IssueKey: "OPS-1", CreatedAt: time.Now()},
+		}))
+		got, err := cache.ListByProject(ctx, tid, "NHI", 10)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.Equal(t, "NHI-1", got[0].IssueKey)
+
+		require.NoError(t, cache.Add(ctx, tid, domain.CreatedTicket{ProjectKey: "NHI", IssueKey: "NHI-2", CreatedAt: time.Now()}))
+		got, _ = cache.ListByProject(ctx, tid, "NHI", 10)
+		require.Len(t, got, 2)
+	})
+
+	t.Run("reconcile gate single-flight + throttle", func(t *testing.T) {
+		gate := redisstore.NewRedisReconcileGate(redisClient, time.Minute)
+		tid := uuid.New()
+
+		ok1, finish1, err := gate.Begin(ctx, tid, false)
+		require.NoError(t, err)
+		require.True(t, ok1, "first caller proceeds")
+
+		ok2, _, err := gate.Begin(ctx, tid, false)
+		require.NoError(t, err)
+		require.False(t, ok2, "concurrent caller is locked out (single-flight)")
+
+		finish1() // release lock + stamp throttle
+
+		ok3, _, _ := gate.Begin(ctx, tid, false)
+		require.False(t, ok3, "throttled within the window")
+
+		ok4, finish4, _ := gate.Begin(ctx, tid, true)
+		require.True(t, ok4, "force bypasses the throttle")
+		finish4()
 	})
 }
 
