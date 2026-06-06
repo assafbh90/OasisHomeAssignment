@@ -10,9 +10,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/samber/lo"
+)
+
+const (
+	// sitemapPath is the conventional sitemap location, fetched relative to the site root.
+	sitemapPath = "/sitemap.xml"
+	// maxSitemapBytes caps a single sitemap document read (defensive against huge files).
+	maxSitemapBytes = 10 << 20 // 10 MiB
 )
 
 // Sitemap discovers URLs via sitemap.xml.
@@ -44,7 +53,7 @@ func (s *Sitemap) Discover(ctx context.Context, siteURL string) ([]string, error
 	root := base.Scheme + "://" + base.Host
 	prefix := strings.TrimRight(siteURL, "/")
 
-	doc, err := s.fetch(ctx, root+"/sitemap.xml")
+	doc, err := s.fetch(ctx, root+sitemapPath)
 	if err != nil {
 		return nil, fmt.Errorf("no sitemap.xml found at %s: %w", root, err)
 	}
@@ -72,27 +81,20 @@ func (s *Sitemap) Discover(ctx context.Context, siteURL string) ([]string, error
 		}
 	}
 
-	// Filter to URLs strictly under the watched prefix.
-	filtered := entries[:0]
-	for _, e := range entries {
+	// Keep only URLs strictly under the watched prefix.
+	posts := lo.Filter(entries, func(e entry, _ int) bool {
 		loc := strings.TrimSpace(e.loc)
-		if strings.HasPrefix(loc, prefix) && len(loc) > len(prefix) {
-			filtered = append(filtered, entry{loc: loc, lastmod: e.lastmod})
-		}
-	}
-	if len(filtered) == 0 {
+		return strings.HasPrefix(loc, prefix) && len(loc) > len(prefix)
+	})
+	if len(posts) == 0 {
 		return nil, fmt.Errorf("no posts under %s in sitemap", prefix)
 	}
 
 	// Newest lastmod first; entries without a lastmod sort last (stable).
-	sort.SliceStable(filtered, func(i, j int) bool {
-		return filtered[i].lastmod > filtered[j].lastmod
+	slices.SortStableFunc(posts, func(a, b entry) int {
+		return strings.Compare(b.lastmod, a.lastmod)
 	})
-	out := make([]string, len(filtered))
-	for i, e := range filtered {
-		out[i] = e.loc
-	}
-	return out, nil
+	return lo.Map(posts, func(e entry, _ int) string { return strings.TrimSpace(e.loc) }), nil
 }
 
 func (s *Sitemap) fetch(ctx context.Context, u string) (*sitemapDoc, error) {
@@ -108,7 +110,7 @@ func (s *Sitemap) fetch(ctx context.Context, u string) (*sitemapDoc, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // cap 10 MiB
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSitemapBytes))
 	if err != nil {
 		return nil, err
 	}

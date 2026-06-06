@@ -69,8 +69,8 @@ func TestRunOnce_CreatesTicketsAndMarksSeen(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 0,
 	})
 	res, err := svc.RunOnce(context.Background(), testAutomation())
@@ -88,8 +88,8 @@ func TestRunOnce_RespectsCap(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 2,
 	})
 	res, err := svc.RunOnce(context.Background(), testAutomation())
@@ -105,8 +105,8 @@ func TestRunOnce_ReauthAbortsWithoutMarkingSeen(t *testing.T) {
 	tickets := &fakeTickets{err: domain.ErrReauthRequired}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
 	_, err := svc.RunOnce(context.Background(), testAutomation())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
@@ -118,8 +118,8 @@ func TestRunOnce_ScrapeFailureSkipsPostButContinues(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
-		Scraper: fakeScraper{err: errors.New("boom")}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Scraper:    fakeScraper{err: errors.New("boom")}, Summarizer: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
 	_, err := svc.RunOnce(context.Background(), testAutomation())
 	require.NoError(t, err)

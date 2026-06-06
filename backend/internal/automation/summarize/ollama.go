@@ -16,6 +16,13 @@ import (
 	"github.com/assafbh/identityhub/internal/domain"
 )
 
+const (
+	// pathGenerate is the Ollama text-generation endpoint.
+	pathGenerate = "/api/generate"
+	// formatJSON constrains the model to emit a JSON object (Ollama structured output).
+	formatJSON = "json"
+)
+
 // Ollama is a thin client for the Ollama /api/generate endpoint.
 type Ollama struct {
 	baseURL  string
@@ -96,12 +103,12 @@ func (o *Ollama) Summarize(ctx context.Context, pageTitle, markdown string) (dom
 		Model:  o.model,
 		Prompt: fmt.Sprintf(promptTemplate, pageTitle, in),
 		Stream: false,
-		Format: "json",
+		Format: formatJSON,
 	})
 	if err != nil {
 		return domain.PostSummary{}, fmt.Errorf("marshal ollama request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+"/api/generate", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL+pathGenerate, bytes.NewReader(reqBody))
 	if err != nil {
 		return domain.PostSummary{}, err
 	}

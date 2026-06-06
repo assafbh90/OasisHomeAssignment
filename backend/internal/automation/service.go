@@ -17,8 +17,16 @@ import (
 	"github.com/assafbh/identityhub/internal/logging"
 )
 
-// maxTitleLen mirrors the HTTP ticket title bound (Jira summary limit).
-const maxTitleLen = 255
+const (
+	// maxTitleLen mirrors the HTTP ticket title bound (Jira summary limit).
+	maxTitleLen = 255
+
+	// Ticket-body Markdown fragments (rendered to ADF by the Jira client). Kept as
+	// named consts so the format is in one place and stays parseable downstream.
+	bodyDivider = "\n\n---\n"
+	sourceLabel = "**Source:** "
+	linkLabel   = "**Link:** "
+)
 
 // Discoverer lists candidate post URLs for a site (newest first).
 type Discoverer interface {
@@ -63,9 +71,9 @@ type Repository interface {
 // Service (the scheduler builds one without CRUD).
 type Deps struct {
 	Repo            Repository
-	Disc            Discoverer
+	Discoverer      Discoverer
 	Scraper         Scraper
-	Summ            Summarizer
+	Summarizer      Summarizer
 	Tickets         TicketCreator
 	Seen            SeenSet
 	MaxPostsPerRun  int
@@ -76,9 +84,9 @@ type Deps struct {
 // Service implements automation CRUD and the per-run pipeline.
 type Service struct {
 	repo            Repository
-	disc            Discoverer
+	discoverer      Discoverer
 	scraper         Scraper
-	summ            Summarizer
+	summarizer      Summarizer
 	tickets         TicketCreator
 	seen            SeenSet
 	maxPostsPerRun  int
@@ -93,7 +101,7 @@ func NewService(d Deps) *Service {
 		now = time.Now
 	}
 	return &Service{
-		repo: d.Repo, disc: d.Disc, scraper: d.Scraper, summ: d.Summ,
+		repo: d.Repo, discoverer: d.Discoverer, scraper: d.Scraper, summarizer: d.Summarizer,
 		tickets: d.Tickets, seen: d.Seen, maxPostsPerRun: d.MaxPostsPerRun,
 		defaultInterval: d.DefaultInterval, now: now,
 	}
@@ -117,7 +125,7 @@ type RunResult struct {
 func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, error) {
 	log := logging.FromContext(ctx)
 
-	urls, err := s.disc.Discover(ctx, a.SiteURL)
+	urls, err := s.discoverer.Discover(ctx, a.SiteURL)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("discover: %w", err)
 	}
@@ -141,7 +149,7 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 			log.Warn("scrape post failed", logging.Err(err))
 			continue
 		}
-		summary, err := s.summ.Summarize(ctx, title, markdown)
+		summary, err := s.summarizer.Summarize(ctx, title, markdown)
 		if err != nil {
 			log.Warn("summarize post failed", logging.Err(err))
 			continue
@@ -196,9 +204,9 @@ func composeTitle(sum domain.PostSummary, fallbackTitle string) string {
 func composeDescription(sum domain.PostSummary, postURL string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(sum.Body))
-	b.WriteString("\n\n---\n")
+	b.WriteString(bodyDivider)
 	if source := strings.TrimSpace(sum.Source); source != "" {
-		b.WriteString("**Source:** ")
+		b.WriteString(sourceLabel)
 		b.WriteString(source)
 		if typ := strings.TrimSpace(sum.Type); typ != "" {
 			b.WriteString(" (")
@@ -207,7 +215,7 @@ func composeDescription(sum domain.PostSummary, postURL string) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("**Link:** ")
+	b.WriteString(linkLabel)
 	b.WriteString(postURL)
 	return b.String()
 }

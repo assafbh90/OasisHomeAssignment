@@ -64,8 +64,8 @@ func TestScheduler_RunDue_RunsAndCompletes(t *testing.T) {
 	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
 	tickets := &fakeTickets{}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: &fakeSeen{},
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{}, Tickets: tickets, Seen: &fakeSeen{},
 	})
 	fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	sch := automation.NewScheduler(automation.SchedulerDeps{
@@ -89,8 +89,8 @@ func TestScheduler_RunDue_DrainsBacklogFast(t *testing.T) {
 	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
 	// 3 posts, cap 2 -> a backlog remains, so the next scan uses the drain window.
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: &fakeTickets{}, Seen: &fakeSeen{},
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{}, Tickets: &fakeTickets{}, Seen: &fakeSeen{},
 		MaxPostsPerRun: 2,
 	})
 	fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -111,8 +111,8 @@ func TestScheduler_RunDue_RecordsError(t *testing.T) {
 	a.Interval = time.Hour
 	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
 	svc := automation.NewService(automation.Deps{
-		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
-		Scraper: fakeScraper{}, Summ: fakeSumm{},
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Scraper:    fakeScraper{}, Summarizer: fakeSumm{},
 		Tickets: &fakeTickets{err: domain.ErrReauthRequired}, Seen: &fakeSeen{},
 	})
 	sch := automation.NewScheduler(automation.SchedulerDeps{
