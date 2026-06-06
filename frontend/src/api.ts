@@ -42,13 +42,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      payload?.error ?? "error",
-      payload?.message ?? res.statusText,
-      payload?.reconnect_url,
-      payload?.pending_action_id,
-    );
+    throw new ApiError(res.status, payload?.error ?? "error", payload?.message ?? res.statusText);
   }
   return payload as T;
 }
