@@ -227,4 +227,10 @@ and multi-tenant isolation proven at the repository **and** RLS layers.
 - The default deployment serves the SPA same-origin via the frontend's nginx
   proxy, so session cookies work without CORS (CORS-with-credentials is supported
   as an alternative via `HTTP_ALLOWED_ORIGINS`).
-- The `NHI Blog Digest` bonus is intentionally out of scope.
+- **NHI Automation (blog digest).** The bonus is implemented as a generalized
+  *Automation* tab: watch a site URL; a separate `scheduler` container periodically
+  discovers new posts via `sitemap.xml`, scrapes each to markdown, summarizes it
+  with a local, memory-limited Ollama model (`qwen2.5:0.5b`, configurable), and
+  files a Jira ticket per post into a chosen project. Automations are tenant-shared
+  and use the creator's Jira credential; processed URLs are tracked in Redis so each
+  post is filed once. See `docs/superpowers/specs/2026-06-06-nhi-automation-blog-digest-design.md`.

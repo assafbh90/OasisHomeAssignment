@@ -116,9 +116,48 @@ services:
       - backend
     networks: [ihnet]
 
+  ollama:
+    build:
+      context: .
+      dockerfile: deployments/docker/ollama.Dockerfile
+      args:
+        MODEL: "${OLLAMA_MODEL:-qwen2.5:0.5b}"
+    # Memory cap: qwen2.5:0.5b is tiny; bound it so it can't balloon the host.
+    mem_limit: "${OLLAMA_MEM_LIMIT:-1500m}"
+    deploy:
+      resources:
+        limits:
+          memory: "${OLLAMA_MEM_LIMIT:-1500m}"
+    volumes:
+      - ollamadata:/root/.ollama
+    networks: [ihnet]
+
+  # Automation worker: same image as the backend, runs the `scheduler` subcommand.
+  scheduler:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+    command: ["scheduler"]
+    env_file: [.env]
+    environment:
+      <<: *app-env
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+    mem_limit: "${SCHEDULER_MEM_LIMIT:-256m}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_started
+    networks: [ihnet]
+
 volumes:
   pgdata:
   redisdata:
+  ollamadata:
 
 networks:
   ihnet:

@@ -100,3 +100,8 @@ tasks:
     desc: Tail compose logs
     cmds:
       - docker compose logs -f {{.CLI_ARGS}}
+
+  scheduler:
+    desc: Run the automation scheduler worker locally (expects infra up)
+    cmds:
+      - go -C {{.BACKEND}} run ./cmd/api scheduler
