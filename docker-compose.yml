@@ -143,6 +143,9 @@ services:
       <<: *app-env
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://ollama:11434}"
     mem_limit: "${SCHEDULER_MEM_LIMIT:-256m}"
+    # Keep draining: if the worker is OOM-killed or crashes, restart it instead of
+    # silently stopping (a stopped worker looks like "automation just stopped").
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy

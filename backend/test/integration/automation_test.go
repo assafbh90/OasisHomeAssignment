@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,9 +149,9 @@ func TestAutomation_EndToEnd(t *testing.T) {
 	tickets := &captureTickets{}
 	svc := automation.NewService(automation.Deps{
 		Repo:           repo,
-		Disc:           discover.New(5 * time.Second),
+		Discoverer:     discover.New(5 * time.Second),
 		Scraper:        scrape.New(5 * time.Second),
-		Summ:           summarize.New(srv.URL, "qwen2.5:0.5b", 5*time.Second, 8000),
+		Summarizer:     summarize.New(srv.URL, "qwen2.5:0.5b", 5*time.Second, 8000),
 		Tickets:        tickets,
 		Seen:           seen,
 		MaxPostsPerRun: 5,
@@ -177,4 +179,75 @@ func TestAutomation_EndToEnd(t *testing.T) {
 
 	// cleanup seen set
 	require.NoError(t, seen.Clear(ctx, a.ID))
+}
+
+// TestScheduler_DrainsBacklogAcrossCycles proves the scheduler re-triggers itself:
+// a backlog larger than the per-run cap is drained over successive RunDue cycles
+// (each completion reschedules ~now via the drain window), and every post is filed
+// exactly once before it settles back to the steady-state interval.
+func TestScheduler_DrainsBacklogAcrossCycles(t *testing.T) {
+	ctx := context.Background()
+
+	const total = 12
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sitemap.xml", func(w http.ResponseWriter, r *http.Request) {
+		base := "http://" + r.Host
+		var b strings.Builder
+		b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
+		for i := 0; i < total; i++ {
+			fmt.Fprintf(&b, `<url><loc>%s/blog/post-%02d</loc><lastmod>2026-01-%02d</lastmod></url>`, base, i, i+1)
+		}
+		b.WriteString(`</urlset>`)
+		_, _ = w.Write([]byte(b.String()))
+	})
+	mux.HandleFunc("/blog/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<html><head><title>Post</title></head><body><article>
+		<h1>Post</h1><p>Body content long enough for readability extraction to succeed.
+		Body content long enough for readability extraction to succeed.</p></article></body></html>`))
+	})
+	mux.HandleFunc("/api/generate", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"response":"{\"title\":\"t\",\"source\":\"s\",\"type\":\"blog\",\"summary\":\"sum\"}"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	repo := store.NewPostgresAutomationRepository(appPool)
+	seen := redisstore.NewRedisAutomationSeenSet(redisClient)
+	tickets := &captureTickets{}
+	svc := automation.NewService(automation.Deps{
+		Repo: repo, Discoverer: discover.New(5 * time.Second), Scraper: scrape.New(5 * time.Second),
+		Summarizer: summarize.New(srv.URL, "m", 5*time.Second, 8000), Tickets: tickets, Seen: seen,
+		MaxPostsPerRun: 5,
+	})
+
+	tenantID, userID := seedAutomationOwner(t, ctx)
+	a := &domain.Automation{
+		ID: uuid.New(), TenantID: tenantID, OwnerUserID: userID, Name: "blog",
+		SiteURL: srv.URL + "/blog", ProjectKey: "NHI", Provider: domain.ProviderJira,
+		Interval: time.Hour, Enabled: true, NextScanAt: time.Now().Add(-time.Minute),
+	}
+	require.NoError(t, repo.Create(ctx, a))
+	defer func() { _ = repo.Delete(ctx, tenantID, a.ID) }()
+	defer func() { _ = seen.Clear(ctx, a.ID) }()
+
+	sch := automation.NewScheduler(automation.SchedulerDeps{
+		Service: svc, Repo: repo, Tick: time.Hour, Batch: 5, Lease: time.Minute,
+		Drain: time.Millisecond, // re-due almost immediately while a backlog remains
+	})
+
+	// Each cycle claims the due row and files up to 5; the drain window makes it due
+	// again next cycle. ceil(12/5)=3 productive cycles drain it; assert convergence.
+	require.Eventually(t, func() bool {
+		sch.RunDue(ctx)
+		time.Sleep(5 * time.Millisecond) // let the drained next_scan_at fall due
+		return len(tickets.created) >= total
+	}, 5*time.Second, 10*time.Millisecond)
+
+	require.Len(t, tickets.created, total) // all processed, exactly once (no duplicates)
+
+	// Backlog drained -> the final completion scheduled the steady-state interval.
+	got, err := repo.Get(ctx, tenantID, a.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.AutomationIdle, got.Status)
+	require.True(t, got.NextScanAt.After(time.Now().Add(30*time.Minute)), "should settle to the steady-state interval once caught up")
 }
