@@ -159,6 +159,15 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 	return s.cache.Replace(ctx, principal.TenantID, tickets)
 }
 
+// EnsureConnected reports whether the principal's provider connection is usable
+// right now, returning domain.ErrReauthRequired if it needs reconnecting. It does
+// no provider API call beyond a possible token refresh, so callers (e.g. the
+// automation runner) can cheaply check before doing expensive work.
+func (s *Service) EnsureConnected(ctx context.Context, principal domain.Identity) error {
+	_, err := s.tokens.FetchValidToken(ctx, principal.TenantID, principal.UserID)
+	return err
+}
+
 // resolveAuth fetches a valid token + credential and assembles ClientAuth.
 func (s *Service) resolveAuth(ctx context.Context, principal domain.Identity) (domain.ClientAuth, error) {
 	token, err := s.tokens.FetchValidToken(ctx, principal.TenantID, principal.UserID)

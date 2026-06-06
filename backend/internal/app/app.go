@@ -177,6 +177,7 @@ func (a *App) buildAutomation(pool *pgxpool.Pool, redisClient *redis.Client, rep
 		Scraper:         scrape.New(a.cfg.Automation.HTTPTimeout),
 		Summarizer:      summarize.New(a.cfg.Ollama.BaseURL, a.cfg.Ollama.Model, a.cfg.Ollama.Timeout, a.cfg.Ollama.MaxInputChars),
 		Tickets:         reports,
+		Connection:      reports,
 		Seen:            redisstore.NewRedisAutomationSeenSet(redisClient),
 		MaxPostsPerRun:  a.cfg.Automation.MaxPostsPerRun,
 		DefaultInterval: a.cfg.Automation.DefaultInterval,

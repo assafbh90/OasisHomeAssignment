@@ -46,6 +46,20 @@ func (f *fakeTickets) CreateTicket(_ context.Context, _ domain.Identity, p domai
 	return domain.TicketRef{Provider: "jira", IssueKey: "NHI-1", URL: "http://j/NHI-1"}, nil
 }
 
+// countingScraper records how many times Scrape is called, to prove no scrape /
+// summarize work happens once the integration is disconnected.
+type countingScraper struct{ calls int }
+
+func (c *countingScraper) Scrape(_ context.Context, u string) (string, string, error) {
+	c.calls++
+	return "Title of " + u, "# body " + u, nil
+}
+
+// fakeConn reports a fixed connection state.
+type fakeConn struct{ err error }
+
+func (f fakeConn) EnsureConnected(context.Context, domain.Identity) error { return f.err }
+
 type fakeSeen struct{ added []string }
 
 func (f *fakeSeen) Unseen(_ context.Context, _ uuid.UUID, urls []string) ([]string, error) {
@@ -125,4 +139,21 @@ func TestRunOnce_ScrapeFailureSkipsPostButContinues(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tickets.created)
 	require.Empty(t, seen.added) // not marked seen -> retried next run
+}
+
+func TestRunOnce_DisconnectedStopsBeforeScrapeOrSummarize(t *testing.T) {
+	t.Parallel()
+	scraper := &countingScraper{}
+	tickets := &fakeTickets{}
+	seen := &fakeSeen{}
+	svc := automation.NewService(automation.Deps{
+		Discoverer: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b"}},
+		Scraper:    scraper, Summarizer: fakeSumm{}, Tickets: tickets, Seen: seen,
+		Connection: fakeConn{err: domain.ErrReauthRequired},
+	})
+	_, err := svc.RunOnce(context.Background(), testAutomation())
+	require.ErrorIs(t, err, domain.ErrReauthRequired)
+	require.Zero(t, scraper.calls) // never scraped -> never queried Ollama
+	require.Empty(t, tickets.created)
+	require.Empty(t, seen.added) // nothing marked -> resumes from here on reconnect
 }

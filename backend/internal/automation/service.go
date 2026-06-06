@@ -49,6 +49,14 @@ type TicketCreator interface {
 	CreateTicket(ctx context.Context, principal domain.Identity, payload domain.TicketPayload) (domain.TicketRef, error)
 }
 
+// ConnectionChecker reports whether the owner's integration is connected, so the
+// runner can stop before scraping/summarizing once it's disconnected. Satisfied
+// by *ticketreport.Service. It returns domain.ErrReauthRequired when reconnect is
+// needed.
+type ConnectionChecker interface {
+	EnsureConnected(ctx context.Context, principal domain.Identity) error
+}
+
 // SeenSet tracks processed URLs per automation.
 type SeenSet interface {
 	Unseen(ctx context.Context, automationID uuid.UUID, urls []string) ([]string, error)
@@ -76,6 +84,7 @@ type Deps struct {
 	Scraper         Scraper
 	Summarizer      Summarizer
 	Tickets         TicketCreator
+	Connection      ConnectionChecker
 	Seen            SeenSet
 	MaxPostsPerRun  int
 	DefaultInterval time.Duration
@@ -89,6 +98,7 @@ type Service struct {
 	scraper         Scraper
 	summarizer      Summarizer
 	tickets         TicketCreator
+	connection      ConnectionChecker
 	seen            SeenSet
 	maxPostsPerRun  int
 	defaultInterval time.Duration
@@ -103,7 +113,7 @@ func NewService(d Deps) *Service {
 	}
 	return &Service{
 		repo: d.Repo, discoverer: d.Discoverer, scraper: d.Scraper, summarizer: d.Summarizer,
-		tickets: d.Tickets, seen: d.Seen, maxPostsPerRun: d.MaxPostsPerRun,
+		tickets: d.Tickets, connection: d.Connection, seen: d.Seen, maxPostsPerRun: d.MaxPostsPerRun,
 		defaultInterval: d.DefaultInterval, now: now,
 	}
 }
@@ -145,6 +155,18 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 	principal := domain.Identity{TenantID: a.TenantID, UserID: a.OwnerUserID}
 	created := 0
 	for _, postURL := range unseen {
+		// Stop before any scrape/summarize work if the owner's Jira is disconnected
+		// (e.g. mid-run). Unprocessed posts stay unseen, so the run resumes from here
+		// once reconnected — and we never query Ollama for a post we can't file.
+		if s.connection != nil {
+			if err := s.connection.EnsureConnected(ctx, principal); err != nil {
+				if errors.Is(err, domain.ErrReauthRequired) {
+					return RunResult{Created: created, Backlog: backlog}, domain.ErrReauthRequired
+				}
+				return RunResult{Created: created, Backlog: backlog}, fmt.Errorf("check connection: %w", err)
+			}
+		}
+
 		title, markdown, err := s.scraper.Scrape(ctx, postURL)
 		if err != nil {
 			log.Warn("scrape post failed", logging.Err(err))
