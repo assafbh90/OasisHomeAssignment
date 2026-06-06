@@ -99,26 +99,42 @@ func NewService(d Deps) *Service {
 	}
 }
 
-// RunOnce executes one full pipeline for an automation. It returns
-// ErrReauthRequired if the owner's Jira connection needs reconnecting (the run
-// aborts, leaving remaining posts unseen for the next run). Per-post scrape /
-// summarize / create failures are logged and skipped (left unseen to retry).
-func (s *Service) RunOnce(ctx context.Context, a domain.Automation) error {
+// RunResult summarizes one RunOnce pass so the scheduler can pace the next scan:
+// while a backlog remains it reschedules soon (fast drain), otherwise it waits
+// the steady-state interval.
+type RunResult struct {
+	Created int  // tickets created this run
+	Backlog bool // more unseen posts remained than this run's cap
+}
+
+// RunOnce executes one full pipeline pass for an automation. Posts are processed
+// one at a time — scrape -> summarize -> create ticket -> mark seen — so there is
+// never more than one Ollama request in flight (synchronous calls are the
+// backpressure) and a post is marked seen only after its ticket exists (so a
+// failure retries next run). It returns ErrReauthRequired if the owner's Jira
+// connection needs reconnecting (the run aborts, leaving the rest unseen).
+// Per-post scrape/summarize/create failures are logged and skipped.
+func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, error) {
 	log := logging.FromContext(ctx)
 
 	urls, err := s.disc.Discover(ctx, a.SiteURL)
 	if err != nil {
-		return fmt.Errorf("discover: %w", err)
+		return RunResult{}, fmt.Errorf("discover: %w", err)
 	}
 	unseen, err := s.seen.Unseen(ctx, a.ID, urls)
 	if err != nil {
-		return fmt.Errorf("filter unseen: %w", err)
+		return RunResult{}, fmt.Errorf("filter unseen: %w", err)
 	}
+	// Cap this run and remember whether we left work behind, so the scheduler can
+	// keep draining quickly instead of waiting a full interval per batch.
+	backlog := false
 	if s.maxPostsPerRun > 0 && len(unseen) > s.maxPostsPerRun {
 		unseen = unseen[:s.maxPostsPerRun]
+		backlog = true
 	}
 
 	principal := domain.Identity{TenantID: a.TenantID, UserID: a.OwnerUserID}
+	created := 0
 	for _, postURL := range unseen {
 		title, markdown, err := s.scraper.Scrape(ctx, postURL)
 		if err != nil {
@@ -134,20 +150,21 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) error {
 			ProjectKey:  a.ProjectKey,
 			Title:       composeTitle(summary, title),
 			Description: composeDescription(summary, postURL),
-			Labels:      []string{"identityhub", "blog-digest"},
+			Labels:      []string{domain.IdentityHubLabel, domain.BlogDigestLabel},
 		})
 		if err != nil {
 			if errors.Is(err, domain.ErrReauthRequired) {
-				return domain.ErrReauthRequired // no point continuing this run
+				return RunResult{Created: created, Backlog: backlog}, domain.ErrReauthRequired
 			}
 			log.Warn("create ticket failed", logging.Err(err))
 			continue
 		}
+		created++
 		if err := s.seen.Add(ctx, a.ID, postURL); err != nil {
 			log.Warn("mark seen failed", logging.Err(err))
 		}
 	}
-	return nil
+	return RunResult{Created: created, Backlog: backlog}, nil
 }
 
 // composeTitle builds the ticket summary as "<source> (<type>) <title>", dropping

@@ -11,17 +11,19 @@ import (
 
 // schedRunner is the slice of Service the scheduler needs.
 type schedRunner interface {
-	RunOnce(ctx context.Context, a domain.Automation) error
+	RunOnce(ctx context.Context, a domain.Automation) (RunResult, error)
 }
 
 // Scheduler claims due automations and runs them one at a time (serial Ollama
-// calls bound memory), then schedules the next scan.
+// calls bound memory), then schedules the next scan: soon (drain) while a backlog
+// remains, else at the automation's steady-state interval.
 type Scheduler struct {
 	svc   schedRunner
 	repo  Repository
 	tick  time.Duration
 	batch int
 	lease time.Duration
+	drain time.Duration
 	now   func() time.Time
 	log   *slog.Logger
 }
@@ -33,6 +35,7 @@ type SchedulerDeps struct {
 	Tick    time.Duration
 	Batch   int
 	Lease   time.Duration
+	Drain   time.Duration // short reschedule while a backlog remains
 	Now     func() time.Time
 	Logger  *slog.Logger
 }
@@ -47,7 +50,10 @@ func NewScheduler(d SchedulerDeps) *Scheduler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Scheduler{svc: d.Service, repo: d.Repo, tick: d.Tick, batch: d.Batch, lease: d.Lease, now: now, log: log}
+	return &Scheduler{
+		svc: d.Service, repo: d.Repo, tick: d.Tick, batch: d.Batch,
+		lease: d.Lease, drain: d.Drain, now: now, log: log,
+	}
 }
 
 // Run loops until ctx is cancelled, polling for due automations each tick.
@@ -74,13 +80,19 @@ func (s *Scheduler) RunDue(ctx context.Context) {
 		return
 	}
 	for _, a := range claimed {
-		runErr := s.svc.RunOnce(ctx, a)
+		res, runErr := s.svc.RunOnce(ctx, a)
 		msg := ""
 		if runErr != nil {
 			msg = runErr.Error()
 			s.log.Warn("automation run failed", slog.String("automation_id", a.ID.String()), logging.Err(runErr))
 		}
-		next := s.now().Add(a.Interval)
+		// Drain a backlog fast (short reschedule); otherwise — caught up, or a hard
+		// failure we should back off from — wait the steady-state interval.
+		interval := a.Interval
+		if runErr == nil && res.Backlog && s.drain > 0 {
+			interval = s.drain
+		}
+		next := s.now().Add(interval)
 		if err := s.repo.Complete(ctx, a.TenantID, a.ID, next, msg); err != nil {
 			s.log.Error("complete automation failed", slog.String("automation_id", a.ID.String()), logging.Err(err))
 		}

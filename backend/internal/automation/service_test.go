@@ -73,8 +73,10 @@ func TestRunOnce_CreatesTicketsAndMarksSeen(t *testing.T) {
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 0,
 	})
-	err := svc.RunOnce(context.Background(), testAutomation())
+	res, err := svc.RunOnce(context.Background(), testAutomation())
 	require.NoError(t, err)
+	require.Equal(t, 2, res.Created)
+	require.False(t, res.Backlog) // both posts fit under the (unlimited) cap
 	require.Len(t, tickets.created, 2)
 	require.Equal(t, "NHI", tickets.created[0].ProjectKey)
 	require.Contains(t, tickets.created[0].Description, "summary:")
@@ -90,7 +92,10 @@ func TestRunOnce_RespectsCap(t *testing.T) {
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 2,
 	})
-	require.NoError(t, svc.RunOnce(context.Background(), testAutomation()))
+	res, err := svc.RunOnce(context.Background(), testAutomation())
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Created)
+	require.True(t, res.Backlog) // 3 posts, cap 2 -> work left for the next (fast) run
 	require.Len(t, tickets.created, 2)
 	require.Len(t, seen.added, 2)
 }
@@ -103,7 +108,7 @@ func TestRunOnce_ReauthAbortsWithoutMarkingSeen(t *testing.T) {
 		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
-	err := svc.RunOnce(context.Background(), testAutomation())
+	_, err := svc.RunOnce(context.Background(), testAutomation())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
 	require.Empty(t, seen.added)
 }
@@ -116,7 +121,8 @@ func TestRunOnce_ScrapeFailureSkipsPostButContinues(t *testing.T) {
 		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{err: errors.New("boom")}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
-	require.NoError(t, svc.RunOnce(context.Background(), testAutomation()))
+	_, err := svc.RunOnce(context.Background(), testAutomation())
+	require.NoError(t, err)
 	require.Empty(t, tickets.created)
 	require.Empty(t, seen.added) // not marked seen -> retried next run
 }

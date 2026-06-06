@@ -82,6 +82,29 @@ func TestScheduler_RunDue_RunsAndCompletes(t *testing.T) {
 	require.Empty(t, repo.completed[0].runErr)
 }
 
+func TestScheduler_RunDue_DrainsBacklogFast(t *testing.T) {
+	t.Parallel()
+	a := testAutomation()
+	a.Interval = time.Hour
+	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
+	// 3 posts, cap 2 -> a backlog remains, so the next scan uses the drain window.
+	svc := automation.NewService(automation.Deps{
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
+		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: &fakeTickets{}, Seen: &fakeSeen{},
+		MaxPostsPerRun: 2,
+	})
+	fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	sch := automation.NewScheduler(automation.SchedulerDeps{
+		Service: svc, Repo: repo, Tick: time.Hour, Batch: 5, Lease: time.Minute,
+		Drain: 15 * time.Second, Now: func() time.Time { return fixedNow },
+	})
+
+	sch.RunDue(context.Background())
+
+	require.Len(t, repo.completed, 1)
+	require.Equal(t, fixedNow.Add(15*time.Second), repo.completed[0].next) // drain, not the 1h interval
+}
+
 func TestScheduler_RunDue_RecordsError(t *testing.T) {
 	t.Parallel()
 	a := testAutomation()

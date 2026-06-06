@@ -82,5 +82,6 @@ const (
 
 	keyAutomationMaxPostsPerRun  = "automation.max_posts_per_run"
 	keyAutomationDefaultInterval = "automation.default_interval"
+	keyAutomationDrainInterval   = "automation.drain_interval"
 	keyAutomationHTTPTimeout     = "automation.http_timeout"
 )

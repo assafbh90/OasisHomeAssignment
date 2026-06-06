@@ -15,6 +15,7 @@ func (a *App) RunScheduler(ctx context.Context) error {
 		Tick:    a.cfg.Scheduler.Tick,
 		Batch:   a.cfg.Scheduler.ClaimBatch,
 		Lease:   a.cfg.Scheduler.Lease,
+		Drain:   a.cfg.Automation.DrainInterval,
 		Logger:  a.log,
 	})
 	a.log.Info("starting IdentityHub automation scheduler")

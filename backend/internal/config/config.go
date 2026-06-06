@@ -153,7 +153,8 @@ type SchedulerConfig struct {
 // AutomationConfig configures a single automation run.
 type AutomationConfig struct {
 	MaxPostsPerRun  int           `mapstructure:"max_posts_per_run"` // cap per run; 0 = unlimited
-	DefaultInterval time.Duration `mapstructure:"default_interval"`  // default scan interval for new automations
+	DefaultInterval time.Duration `mapstructure:"default_interval"`  // steady-state scan interval once caught up
+	DrainInterval   time.Duration `mapstructure:"drain_interval"`    // short reschedule while a backlog remains (fast initial drain)
 	HTTPTimeout     time.Duration `mapstructure:"http_timeout"`      // timeout for sitemap/scrape fetches
 }
 
@@ -265,6 +266,7 @@ func Load(path string) (Config, error) {
 		Automation: AutomationConfig{
 			MaxPostsPerRun:  v.GetInt(keyAutomationMaxPostsPerRun),
 			DefaultInterval: v.GetDuration(keyAutomationDefaultInterval),
+			DrainInterval:   v.GetDuration(keyAutomationDrainInterval),
 			HTTPTimeout:     v.GetDuration(keyAutomationHTTPTimeout),
 		},
 	}
@@ -379,12 +381,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(keyOllamaTimeout, "120s")
 	v.SetDefault(keyOllamaMaxInputChars, 8000)
 
-	v.SetDefault(keySchedulerTick, "30s")
+	v.SetDefault(keySchedulerTick, "10s")
 	v.SetDefault(keySchedulerClaimBatch, 5)
 	v.SetDefault(keySchedulerLease, "10m")
 
 	v.SetDefault(keyAutomationMaxPostsPerRun, 5)
 	v.SetDefault(keyAutomationDefaultInterval, "1h")
+	v.SetDefault(keyAutomationDrainInterval, "15s")
 	v.SetDefault(keyAutomationHTTPTimeout, "15s")
 }
 
