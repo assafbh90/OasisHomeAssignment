@@ -96,8 +96,9 @@ func Run() error {
 }
 
 // Wire builds and connects all adapters and services. It is the only place
-// concretes are bound to interfaces; it reads top-down as infra → repos → redis
-// → services → transport.
+// concretes are bound to interfaces. The body is a table of contents — each step
+// builds one layer and hands its outputs to the next: infra → repos → redis →
+// auth → Jira → automation → transport.
 func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
 	a := &App{cfg: cfg, log: log}
 
@@ -109,69 +110,101 @@ func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 	redisStores := newRedisAdapters(redisClient, cfg)
 	a.tenants, a.users = repos.tenants, repos.users // also held on App for Seed
 
-	// Auth services.
+	authn := a.buildAuth(repos, redisStores)
+	jira := a.buildJiraIntegration(repos, redisStores)
+	a.buildAutomation(pool, redisClient, jira.reports)
+	a.deps = a.buildRouterDeps(pool, redisClient, redisStores, authn, jira)
+
+	return a, nil
+}
+
+// authServices are the authentication components the transport layer consumes.
+type authServices struct {
+	authenticator *auth.UserAuthenticator
+	sessions      *session.Manager
+	tokens        *apitoken.TokenIssuer
+}
+
+// buildAuth wires password authentication, opaque sessions, and machine API keys.
+func (a *App) buildAuth(repos repos, redisStores redisAdapters) authServices {
 	a.hasher = auth.NewArgon2PasswordHasher(auth.Argon2Params{
-		Memory: cfg.Argon2.Memory, Iterations: cfg.Argon2.Iterations, Parallelism: cfg.Argon2.Parallelism,
-		SaltLength: cfg.Argon2.SaltLength, KeyLength: cfg.Argon2.KeyLength,
+		Memory: a.cfg.Argon2.Memory, Iterations: a.cfg.Argon2.Iterations, Parallelism: a.cfg.Argon2.Parallelism,
+		SaltLength: a.cfg.Argon2.SaltLength, KeyLength: a.cfg.Argon2.KeyLength,
 	})
-	authenticator := auth.NewUserAuthenticator(a.users, a.hasher)
-	sessionMgr := session.NewManager(redisStores.sessions, cfg.Session.TTL, cfg.Session.AbsoluteTTL)
-	tokenIssuer := apitoken.NewTokenIssuer(repos.tokens, redisStores.tokens, cfg.APIToken.Prefix, cfg.APIToken.CacheTTL)
+	return authServices{
+		authenticator: auth.NewUserAuthenticator(a.users, a.hasher),
+		sessions:      session.NewManager(redisStores.sessions, a.cfg.Session.TTL, a.cfg.Session.AbsoluteTTL),
+		tokens:        apitoken.NewTokenIssuer(repos.tokens, redisStores.tokens, a.cfg.APIToken.Prefix, a.cfg.APIToken.CacheTTL),
+	}
+}
 
-	// Jira integration.
-	jiraProvider := oauth.NewJiraOAuthProvider(oauth.JiraConfig{
-		ClientID: cfg.Jira.ClientID, ClientSecret: cfg.Jira.ClientSecret, RedirectURI: cfg.Jira.RedirectURI,
-		Scopes: cfg.Jira.Scopes, AuthURL: cfg.Jira.AuthURL, TokenURL: cfg.Jira.TokenURL, APIBaseURL: cfg.Jira.APIBaseURL,
-		UsePKCE: cfg.Jira.UsePKCE, InactivityWindow: cfg.Jira.InactivityWindow, HTTPTimeout: cfg.Jira.HTTPTimeout,
+// jiraServices are the integration services the transport and automation layers consume.
+type jiraServices struct {
+	connection *integration.ConnectionService
+	reports    *ticketreport.Service
+}
+
+// buildJiraIntegration wires the Jira OAuth provider, REST client, and reactive
+// token manager, then the connection + ticket-report services built on them.
+func (a *App) buildJiraIntegration(repos repos, redisStores redisAdapters) jiraServices {
+	provider := oauth.NewJiraOAuthProvider(oauth.JiraConfig{
+		ClientID: a.cfg.Jira.ClientID, ClientSecret: a.cfg.Jira.ClientSecret, RedirectURI: a.cfg.Jira.RedirectURI,
+		Scopes: a.cfg.Jira.Scopes, AuthURL: a.cfg.Jira.AuthURL, TokenURL: a.cfg.Jira.TokenURL, APIBaseURL: a.cfg.Jira.APIBaseURL,
+		UsePKCE: a.cfg.Jira.UsePKCE, InactivityWindow: a.cfg.Jira.InactivityWindow, HTTPTimeout: a.cfg.Jira.HTTPTimeout,
 	})
-	jiraClient := client.NewJiraClient(cfg.Jira.APIBaseURL, cfg.Jira.HTTPTimeout)
+	jiraClient := client.NewJiraClient(a.cfg.Jira.APIBaseURL, a.cfg.Jira.HTTPTimeout)
 	tokenManager := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{
-		Repo: repos.creds, Provider: jiraProvider, ProviderName: jiraProvider.Name(),
-		Skew: cfg.Jira.AccessTokenSkew,
+		Repo: repos.creds, Provider: provider, ProviderName: provider.Name(), Skew: a.cfg.Jira.AccessTokenSkew,
 	})
-	connectionSvc := integration.NewConnectionService(integration.Deps{
-		Provider: jiraProvider, State: redisStores.state, Repo: repos.creds, UsePKCE: cfg.Jira.UsePKCE,
-	})
-	reportSvc := ticketreport.NewService(ticketreport.Deps{
-		Provider: jiraProvider.Name(), Tokens: tokenManager, Creds: repos.creds,
-		Client: jiraClient, Cache: redisStores.tickets, Gate: redisStores.reconcile,
-	})
+	return jiraServices{
+		connection: integration.NewConnectionService(integration.Deps{
+			Provider: provider, State: redisStores.state, Repo: repos.creds, UsePKCE: a.cfg.Jira.UsePKCE,
+		}),
+		reports: ticketreport.NewService(ticketreport.Deps{
+			Provider: provider.Name(), Tokens: tokenManager, Creds: repos.creds,
+			Client: jiraClient, Cache: redisStores.tickets, Gate: redisStores.reconcile,
+		}),
+	}
+}
 
-	// Automation (blog digest) subsystem.
+// buildAutomation wires the blog-digest subsystem: its store, Redis seen-set, and
+// the run pipeline (discover → scrape → summarize), reusing ticket reporting to file.
+func (a *App) buildAutomation(pool *pgxpool.Pool, redisClient *redis.Client, reports *ticketreport.Service) {
 	a.autoRepo = store.NewPostgresAutomationRepository(pool)
-	automationSeen := redisstore.NewRedisAutomationSeenSet(redisClient)
 	a.autoSvc = automation.NewService(automation.Deps{
 		Repo:            a.autoRepo,
-		Disc:            discover.New(cfg.Automation.HTTPTimeout),
-		Scraper:         scrape.New(cfg.Automation.HTTPTimeout),
-		Summ:            summarize.New(cfg.Ollama.BaseURL, cfg.Ollama.Model, cfg.Ollama.Timeout, cfg.Ollama.MaxInputChars),
-		Tickets:         reportSvc,
-		Seen:            automationSeen,
-		MaxPostsPerRun:  cfg.Automation.MaxPostsPerRun,
-		DefaultInterval: cfg.Automation.DefaultInterval,
+		Discoverer:      discover.New(a.cfg.Automation.HTTPTimeout),
+		Scraper:         scrape.New(a.cfg.Automation.HTTPTimeout),
+		Summarizer:      summarize.New(a.cfg.Ollama.BaseURL, a.cfg.Ollama.Model, a.cfg.Ollama.Timeout, a.cfg.Ollama.MaxInputChars),
+		Tickets:         reports,
+		Seen:            redisstore.NewRedisAutomationSeenSet(redisClient),
+		MaxPostsPerRun:  a.cfg.Automation.MaxPostsPerRun,
+		DefaultInterval: a.cfg.Automation.DefaultInterval,
 	})
+}
 
-	// Transport: identity resolvers (bearer first, then session), then handlers.
+// buildRouterDeps assembles the HTTP layer: identity resolution (bearer first,
+// then session cookie) plus the per-feature handlers.
+func (a *App) buildRouterDeps(pool *pgxpool.Pool, redisClient *redis.Client, redisStores redisAdapters, authn authServices, jira jiraServices) transport.RouterDeps {
 	resolver := transport.NewChainIdentityResolver(
-		transport.NewBearerTokenResolver(tokenIssuer),
-		transport.NewSessionIdentityResolver(sessionMgr, cfg.Session.CookieName),
+		transport.NewBearerTokenResolver(authn.tokens),
+		transport.NewSessionIdentityResolver(authn.sessions, a.cfg.Session.CookieName),
 	)
 	cookie := transport.CookieConfig{
-		SessionName: cfg.Session.CookieName, Secure: cfg.Session.CookieSecure,
-		Domain: cfg.Session.CookieDomain, MaxAge: cfg.Session.TTL,
+		SessionName: a.cfg.Session.CookieName, Secure: a.cfg.Session.CookieSecure,
+		Domain: a.cfg.Session.CookieDomain, MaxAge: a.cfg.Session.TTL,
 	}
-	a.deps = transport.RouterDeps{
-		Logger:      log,
+	return transport.RouterDeps{
+		Logger:      a.log,
 		Resolver:    resolver,
-		TLSEnabled:  cfg.Session.CookieSecure,
-		AllowOrigin: cfg.HTTP.AllowedOrigins,
-		Auth:        transport.NewAuthHandler(authenticator, sessionMgr, redisStores.rate, cookie),
-		Tokens:      transport.NewTokenHandler(tokenIssuer),
+		TLSEnabled:  a.cfg.Session.CookieSecure,
+		AllowOrigin: a.cfg.HTTP.AllowedOrigins,
+		Auth:        transport.NewAuthHandler(authn.authenticator, authn.sessions, redisStores.rate, cookie),
+		Tokens:      transport.NewTokenHandler(authn.tokens),
 		Health:      transport.NewHealthHandler(pool, platform.RedisPinger{Client: redisClient}),
-		Integration: transport.NewIntegrationHandler(connectionSvc, reportSvc, "/"),
+		Integration: transport.NewIntegrationHandler(jira.connection, jira.reports, "/"),
 		Automation:  transport.NewAutomationHandler(a.autoSvc),
 	}
-	return a, nil
 }
 
 // initInfra opens the Postgres pool, Redis client, and token cipher, registering
