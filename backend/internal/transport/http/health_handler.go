@@ -28,11 +28,24 @@ func NewHealthHandler(db, redis pinger) *HealthHandler {
 }
 
 // Live reports process liveness (always 200 if serving).
+//
+// @Summary  Liveness probe
+// @Tags     ops
+// @Produce  json
+// @Success  200  {object}  map[string]string
+// @Router   /healthz [get]
 func (h *HealthHandler) Live(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // Ready checks Postgres and Redis.
+//
+// @Summary  Readiness probe (Postgres + Redis)
+// @Tags     ops
+// @Produce  json
+// @Success  200  {object}  map[string]interface{}
+// @Failure  503  {object}  map[string]interface{}
+// @Router   /readyz [get]
 func (h *HealthHandler) Ready(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), readinessTimeout)
 	defer cancel()

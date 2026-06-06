@@ -47,7 +47,9 @@ type loginResponse struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
-// Login verifies credentials, creates a session, and sets cookies.
+// Login verifies credentials, creates a session, and sets cookies. It is a
+// browser/session flow used by the SPA, so it's intentionally not in the public
+// API docs (which cover the machine API consumed with a Bearer key).
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := bindJSON(c, &req); err != nil {
@@ -88,7 +90,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, loginResponse{identityResponse: toIdentityResponse(id), CSRFToken: csrf})
 }
 
-// Logout revokes the current session and clears cookies.
+// Logout revokes the current session and clears cookies. Session/cookie flow —
+// not part of the public API docs.
 func (h *AuthHandler) Logout(c *gin.Context) {
 	ctx := c.Request.Context()
 	if cookie, err := c.Request.Cookie(h.cookie.SessionName); err == nil && cookie.Value != "" {
@@ -103,6 +106,15 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 }
 
 // Me returns the current identity.
+//
+// @Summary  Current identity
+// @Tags     auth
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Success  200  {object}  identityResponse
+// @Failure  401  {object}  errorResponse
+// @Router   /v1/auth/me [get]
 func (h *AuthHandler) Me(c *gin.Context) {
 	id, ok := mustIdentity(c)
 	if !ok {

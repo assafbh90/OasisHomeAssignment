@@ -14,19 +14,18 @@ import (
 // They form the API's error contract (the SPA and API clients switch on them),
 // and some are returned from more than one handler.
 const (
-	errCodeInvalidCredentials     = "invalid_credentials"
-	errCodeUnauthenticated        = "unauthenticated"
-	errCodeForbidden              = "forbidden"
-	errCodeProviderNotSupported   = "provider_not_supported"
-	errCodeCapabilityNotSupported = "capability_not_supported"
-	errCodeNotConnected           = "not_connected"
-	errCodeInvalidState           = "invalid_state"
-	errCodeInternal               = "internal_error"
-	errCodeInvalidRequest         = "invalid_request"
-	errCodeReauthRequired         = "reauth_required"
-	errCodeCSRFFailed             = "csrf_failed"
-	errCodeRateLimited            = "rate_limited"
-	errCodeNotFound               = "not_found"
+	errCodeInvalidCredentials   = "invalid_credentials"
+	errCodeUnauthenticated      = "unauthenticated"
+	errCodeForbidden            = "forbidden"
+	errCodeProviderNotSupported = "provider_not_supported"
+	errCodeNotConnected         = "not_connected"
+	errCodeInvalidState         = "invalid_state"
+	errCodeInternal             = "internal_error"
+	errCodeInvalidRequest       = "invalid_request"
+	errCodeReauthRequired       = "reauth_required"
+	errCodeCSRFFailed           = "csrf_failed"
+	errCodeRateLimited          = "rate_limited"
+	errCodeNotFound             = "not_found"
 )
 
 // errorResponse is the uniform error envelope returned to clients.
@@ -52,8 +51,6 @@ func respondError(c *gin.Context, err error) {
 		c.JSON(http.StatusForbidden, errorResponse{Error: errCodeForbidden, Message: "insufficient permissions"})
 	case errors.Is(err, domain.ErrProviderNotSupported):
 		c.JSON(http.StatusNotFound, errorResponse{Error: errCodeProviderNotSupported, Message: "unknown integration provider"})
-	case errors.Is(err, domain.ErrCapabilityNotSupported):
-		c.JSON(http.StatusUnprocessableEntity, errorResponse{Error: errCodeCapabilityNotSupported, Message: "operation not supported by provider"})
 	case errors.Is(err, domain.ErrCredentialNotFound):
 		c.JSON(http.StatusNotFound, errorResponse{Error: errCodeNotConnected, Message: "integration is not connected"})
 	case errors.Is(err, domain.ErrStateNotFound):

@@ -70,6 +70,17 @@ input, select, textarea {
 textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
+/* Keep browser autofill (e.g. saved passwords) on the dark theme instead of the
+   forced light background Chrome applies on focus. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset;
+  caret-color: var(--text);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 button {
   cursor: pointer;
   font-size: 14px;
@@ -81,7 +92,7 @@ button.primary { background: var(--accent-2); color: white; }
 button.primary:hover { background: var(--accent); }
 button.primary:disabled { opacity: 0.6; cursor: default; }
 button.ghost { background: transparent; border-color: var(--border); color: var(--text); }
-button.link { background: none; color: var(--accent); padding: 4px 6px; }
+button.link, a.link { background: none; color: var(--accent); padding: 4px 6px; font-size: 14px; text-decoration: none; cursor: pointer; }
 button.link.danger { color: var(--error); }
 button.link.small { font-size: 12px; padding: 0; margin: -6px 0 12px; }
 

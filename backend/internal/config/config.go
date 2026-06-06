@@ -61,7 +61,7 @@ type PostgresConfig struct {
 	MaxConns int32  `mapstructure:"max_conns"`
 	// StatementTimeout / IdleInTxTimeout are set as session GUCs on every
 	// pooled connection: they bound query duration and reap transactions left
-	// open by a crashed instance (the safety net for FOR-UPDATE refresh locks).
+	// open by a crashed instance — general crash-safety hygiene for the pool.
 	StatementTimeout time.Duration `mapstructure:"statement_timeout"`
 	IdleInTxTimeout  time.Duration `mapstructure:"idle_in_tx_timeout"`
 }
@@ -122,19 +122,17 @@ type RateLimitConfig struct {
 
 // JiraConfig configures the Jira Cloud 3LO provider.
 type JiraConfig struct {
-	ClientID            string        `mapstructure:"client_id"`
-	ClientSecret        string        `mapstructure:"client_secret"`
-	RedirectURI         string        `mapstructure:"redirect_uri"`
-	Scopes              []string      `mapstructure:"scopes"`
-	AuthURL             string        `mapstructure:"auth_url"`
-	TokenURL            string        `mapstructure:"token_url"`
-	APIBaseURL          string        `mapstructure:"api_base_url"`
-	UsePKCE             bool          `mapstructure:"use_pkce"`
-	RotatesRefreshToken bool          `mapstructure:"rotates_refresh_token"`
-	InactivityWindow    time.Duration `mapstructure:"inactivity_window"`
-	AbsoluteWindow      time.Duration `mapstructure:"absolute_window"`
-	AccessTokenSkew     time.Duration `mapstructure:"access_token_skew"`
-	HTTPTimeout         time.Duration `mapstructure:"http_timeout"`
+	ClientID         string        `mapstructure:"client_id"`
+	ClientSecret     string        `mapstructure:"client_secret"`
+	RedirectURI      string        `mapstructure:"redirect_uri"`
+	Scopes           []string      `mapstructure:"scopes"`
+	AuthURL          string        `mapstructure:"auth_url"`
+	TokenURL         string        `mapstructure:"token_url"`
+	APIBaseURL       string        `mapstructure:"api_base_url"`
+	UsePKCE          bool          `mapstructure:"use_pkce"`
+	InactivityWindow time.Duration `mapstructure:"inactivity_window"`
+	AccessTokenSkew  time.Duration `mapstructure:"access_token_skew"`
+	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
 }
 
 // OllamaConfig configures the local LLM used to summarize blog posts.
@@ -241,19 +239,17 @@ func Load(path string) (Config, error) {
 			LoginWindow: v.GetDuration(keyRateLimitLoginWindow),
 		},
 		Jira: JiraConfig{
-			ClientID:            v.GetString(keyJiraClientID),
-			ClientSecret:        v.GetString(keyJiraClientSecret),
-			RedirectURI:         v.GetString(keyJiraRedirectURI),
-			Scopes:              getStringSlice(v, keyJiraScopes),
-			AuthURL:             v.GetString(keyJiraAuthURL),
-			TokenURL:            v.GetString(keyJiraTokenURL),
-			APIBaseURL:          v.GetString(keyJiraAPIBaseURL),
-			UsePKCE:             v.GetBool(keyJiraUsePKCE),
-			RotatesRefreshToken: v.GetBool(keyJiraRotatesRefreshToken),
-			InactivityWindow:    v.GetDuration(keyJiraInactivityWindow),
-			AbsoluteWindow:      v.GetDuration(keyJiraAbsoluteWindow),
-			AccessTokenSkew:     v.GetDuration(keyJiraAccessTokenSkew),
-			HTTPTimeout:         v.GetDuration(keyJiraHTTPTimeout),
+			ClientID:         v.GetString(keyJiraClientID),
+			ClientSecret:     v.GetString(keyJiraClientSecret),
+			RedirectURI:      v.GetString(keyJiraRedirectURI),
+			Scopes:           getStringSlice(v, keyJiraScopes),
+			AuthURL:          v.GetString(keyJiraAuthURL),
+			TokenURL:         v.GetString(keyJiraTokenURL),
+			APIBaseURL:       v.GetString(keyJiraAPIBaseURL),
+			UsePKCE:          v.GetBool(keyJiraUsePKCE),
+			InactivityWindow: v.GetDuration(keyJiraInactivityWindow),
+			AccessTokenSkew:  v.GetDuration(keyJiraAccessTokenSkew),
+			HTTPTimeout:      v.GetDuration(keyJiraHTTPTimeout),
 		},
 		Ollama: OllamaConfig{
 			BaseURL:       v.GetString(keyOllamaBaseURL),
@@ -374,9 +370,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(keyJiraTokenURL, "https://auth.atlassian.com/oauth/token")
 	v.SetDefault(keyJiraAPIBaseURL, "https://api.atlassian.com")
 	v.SetDefault(keyJiraUsePKCE, true)
-	v.SetDefault(keyJiraRotatesRefreshToken, true)
 	v.SetDefault(keyJiraInactivityWindow, "2160h") // 90 days
-	v.SetDefault(keyJiraAbsoluteWindow, "8760h")   // 365 days
 	v.SetDefault(keyJiraAccessTokenSkew, "60s")
 	v.SetDefault(keyJiraHTTPTimeout, "10s")
 

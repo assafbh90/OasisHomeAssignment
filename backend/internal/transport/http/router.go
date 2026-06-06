@@ -1,9 +1,14 @@
+// Package http contains the gin router, middleware, request/response DTOs, and
+// HTTP handlers. It is the only layer that knows about gin. Handlers read the
+// authenticated Identity from the request context — never from request input.
 package http
 
 import (
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/assafbh/identityhub/internal/domain"
 )
@@ -33,6 +38,8 @@ func NewRouter(d RouterDeps) *gin.Engine {
 	// Public.
 	r.GET("/healthz", d.Health.Live)
 	r.GET("/readyz", d.Health.Ready)
+	// Interactive API docs (Swagger UI) at /api_docs/index.html.
+	r.GET("/api_docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL("/api_docs/doc.json")))
 	r.POST("/v1/auth/login", d.Auth.Login)
 
 	// Authenticated. CSRF guards cookie-authenticated unsafe methods.
@@ -86,6 +93,7 @@ func registerIntegrationRoutes(v1 *gin.RouterGroup, h *IntegrationHandler) {
 			p.GET("/projects", h.ListProjects)
 			p.GET("/tickets", h.ListRecentTickets)
 			p.POST("/tickets", RequireScope(domain.ScopeIntegrationsWrite), h.CreateTicket)
+			p.POST("/reconcile", h.Reconcile)
 			p.DELETE("", RequireScope(domain.ScopeIntegrationsWrite), h.Disconnect)
 		}
 	}

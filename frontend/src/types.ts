@@ -69,14 +69,10 @@ export interface Automation {
 export class ApiError extends Error {
   status: number;
   code: string;
-  reconnectUrl?: string;
-  pendingActionId?: string;
 
-  constructor(status: number, code: string, message: string, reconnectUrl?: string, pendingActionId?: string) {
+  constructor(status: number, code: string, message: string) {
     super(message);
     this.status = status;
     this.code = code;
-    this.reconnectUrl = reconnectUrl;
-    this.pendingActionId = pendingActionId;
   }
 }

@@ -18,16 +18,15 @@ import (
 
 func newProvider(serverURL string) *oauth.JiraOAuthProvider {
 	return oauth.NewJiraOAuthProvider(oauth.JiraConfig{
-		ClientID:            "client-id",
-		ClientSecret:        "client-secret",
-		RedirectURI:         "https://app.example.com/callback",
-		Scopes:              []string{"read:jira-work", "write:jira-work", "offline_access"},
-		AuthURL:             "https://auth.atlassian.com/authorize",
-		TokenURL:            serverURL + "/oauth/token",
-		APIBaseURL:          serverURL,
-		UsePKCE:             true,
-		RotatesRefreshToken: true,
-		InactivityWindow:    2160 * time.Hour,
+		ClientID:         "client-id",
+		ClientSecret:     "client-secret",
+		RedirectURI:      "https://app.example.com/callback",
+		Scopes:           []string{"read:jira-work", "write:jira-work", "offline_access"},
+		AuthURL:          "https://auth.atlassian.com/authorize",
+		TokenURL:         serverURL + "/oauth/token",
+		APIBaseURL:       serverURL,
+		UsePKCE:          true,
+		InactivityWindow: 2160 * time.Hour,
 	})
 }
 
@@ -49,13 +48,13 @@ func TestJiraOAuthProvider_ExchangeCodeForTokens(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/oauth/token":
-			var body map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			// x/oauth2 sends form-encoded token requests.
 			// assert (not require) inside an HTTP handler — never call FailNow off
 			// the test goroutine.
-			assert.Equal(t, "authorization_code", body["grant_type"])
-			assert.Equal(t, "the-code", body["code"])
-			assert.Equal(t, "the-verifier", body["code_verifier"])
+			assert.Equal(t, "authorization_code", r.PostFormValue("grant_type"))
+			assert.Equal(t, "the-code", r.PostFormValue("code"))
+			assert.Equal(t, "the-verifier", r.PostFormValue("code_verifier"))
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token": "at", "refresh_token": "rt", "expires_in": 3600, "scope": "read:jira-work write:jira-work",
 			})
@@ -88,10 +87,9 @@ func TestJiraOAuthProvider_RefreshTokens(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var body map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			assert.Equal(t, "refresh_token", body["grant_type"])
-			assert.Equal(t, "old-rt", body["refresh_token"])
+			assert.Equal(t, "refresh_token", r.PostFormValue("grant_type"))
+			assert.Equal(t, "old-rt", r.PostFormValue("refresh_token"))
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"access_token": "new-at", "refresh_token": "new-rt", "expires_in": 3600, "scope": "read:jira-work",
 			})
@@ -147,6 +145,7 @@ func TestJiraOAuthProvider_NoAccessibleSites(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth/token" {
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "refresh_token": "rt", "expires_in": 3600})
 			return
 		}

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,34 @@ import (
 	"github.com/assafbh/identityhub/internal/domain"
 	"github.com/assafbh/identityhub/internal/logging"
 )
+
+// --- authenticated-identity request context ---------------------------------
+
+type ctxKey int
+
+const identityKey ctxKey = iota
+
+// withIdentity stores the resolved identity in ctx.
+func withIdentity(ctx context.Context, id domain.Identity) context.Context {
+	return context.WithValue(ctx, identityKey, id)
+}
+
+// identityFromContext returns the identity stored in ctx, if any.
+func identityFromContext(ctx context.Context) (domain.Identity, bool) {
+	id, ok := ctx.Value(identityKey).(domain.Identity)
+	return id, ok
+}
+
+// setIdentity attaches the identity to the gin request's context.
+func setIdentity(c *gin.Context, id domain.Identity) {
+	c.Request = c.Request.WithContext(withIdentity(c.Request.Context(), id))
+}
+
+// mustIdentity returns the identity from the gin request context. It is only
+// called from handlers behind the auth middleware, which guarantees presence.
+func mustIdentity(c *gin.Context) (domain.Identity, bool) {
+	return identityFromContext(c.Request.Context())
+}
 
 const (
 	headerRequestID = "X-Request-ID"

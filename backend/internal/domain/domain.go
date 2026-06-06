@@ -1,10 +1,45 @@
+// Package domain holds the core entities, value objects, and domain errors.
+// It is pure Go: it imports no transport, storage, or third-party infra.
 package domain
 
 import (
+	"errors"
 	"slices"
 	"time"
 
 	"github.com/google/uuid"
+)
+
+// Sentinel domain errors. Adapters wrap these with %w; transport maps them to
+// HTTP status codes. Client-facing messages stay generic (see transport) to
+// avoid leaking which factor failed.
+var (
+	// Auth
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrSessionNotFound    = errors.New("session not found")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrTenantNotFound     = errors.New("tenant not found")
+	ErrTokenNotFound      = errors.New("token not found")
+	ErrTokenRevoked       = errors.New("token revoked")
+	ErrTokenExpired       = errors.New("token expired")
+
+	// Authorization / tenancy
+	ErrTenantMismatch  = errors.New("tenant mismatch")
+	ErrForbiddenScope  = errors.New("forbidden scope")
+	ErrUnauthenticated = errors.New("unauthenticated")
+
+	// Integration
+	ErrReauthRequired       = errors.New("reauth required")
+	ErrCredentialNotFound   = errors.New("credential not found")
+	ErrProviderNotSupported = errors.New("provider not supported")
+	ErrStateNotFound        = errors.New("oauth state not found or already used")
+
+	// Automation
+	ErrAutomationNotFound = errors.New("automation not found")
+
+	// ErrInvalidGrant is returned by a provider when a refresh token is no longer
+	// valid (e.g. rotated/expired). It drives the connection to needs_reauth.
+	ErrInvalidGrant = errors.New("invalid_grant")
 )
 
 // --- Identity & auth ---------------------------------------------------------
@@ -197,6 +232,11 @@ type ConnectionInfo struct {
 
 // --- Tickets (NHI findings) --------------------------------------------------
 
+// IdentityHubLabel tags every ticket IdentityHub creates in the provider, so the
+// set is discoverable by a label search (drift reconciliation) regardless of
+// which user created it.
+const IdentityHubLabel = "identityhub"
+
 // TicketPayload is a provider-agnostic request to create a record (an NHI
 // finding ticket). For Jira it maps to an issue.
 type TicketPayload struct {
@@ -228,12 +268,21 @@ type ClientAuth struct {
 	SiteURL           string // workspace base, e.g. https://acme.atlassian.net (for issue links)
 }
 
-// CreatedTicket is an app-created ticket, persisted so the "recent tickets"
-// view can list exactly what was created through IdentityHub (per project).
+// ProviderTicket is one IdentityHub-labelled ticket as returned by a provider
+// label search. It is the unit of drift reconciliation.
+type ProviderTicket struct {
+	IssueKey   string
+	Title      string
+	ProjectKey string
+	URL        string
+	CreatedAt  time.Time
+}
+
+// CreatedTicket is a cached IdentityHub ticket for the tenant's "recent tickets"
+// view. The cache (Redis) mirrors the Jira label search, so this is a snapshot,
+// not an authoritative record — Jira is the source of truth.
 type CreatedTicket struct {
-	ID         uuid.UUID
 	TenantID   uuid.UUID
-	UserID     uuid.UUID
 	Provider   string
 	ProjectKey string
 	IssueKey   string

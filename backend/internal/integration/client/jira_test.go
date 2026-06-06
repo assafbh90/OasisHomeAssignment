@@ -64,8 +64,9 @@ func TestJiraClient_CreateIssue(t *testing.T) {
 	require.Equal(t, "Stale Service Account: svc-deploy-prod", fields["summary"])
 	require.Equal(t, map[string]any{"key": "NHI"}, fields["project"])
 	require.Equal(t, map[string]any{"name": "Task"}, fields["issuetype"])
-	require.Equal(t, []any{"nhi-finding", "stale"}, fields["labels"]) // spaces sanitized
-	require.NotNil(t, fields["description"])                          // ADF doc present
+	// spaces sanitized + the IdentityHub label always appended for discovery.
+	require.Equal(t, []any{"nhi-finding", "stale", "identityhub"}, fields["labels"])
+	require.NotNil(t, fields["description"]) // ADF doc present
 }
 
 func TestJiraClient_ListProjects(t *testing.T) {
@@ -93,19 +94,6 @@ func TestJiraClient_ListProjects(t *testing.T) {
 	}
 }
 
-func TestJiraClient_VerifyConnectionAndName(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/ex/jira/cloud-1/rest/api/3/myself", r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := client.NewJiraClient(srv.URL, 5*time.Second)
-	require.Equal(t, "jira", c.Name())
-	require.NoError(t, c.VerifyConnection(context.Background(), testAuth()))
-}
-
 func TestJiraClient_CreateIssue_ErrorMapping(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -118,4 +106,33 @@ func TestJiraClient_CreateIssue_ErrorMapping(t *testing.T) {
 	_, err := c.CreateIssue(context.Background(), testAuth(), domain.TicketPayload{ProjectKey: "X", Title: "t"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "400")
+}
+
+func TestJiraClient_SearchByLabel(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/ex/jira/cloud-1/rest/api/3/search/jql", r.URL.Path)
+		assert.Contains(t, r.URL.Query().Get("jql"), "identityhub")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issues": []map[string]any{{
+				"key": "NHI-1",
+				"fields": map[string]any{
+					"summary": "Stale account", "created": "2026-06-06T12:00:00.000+0000",
+					"project": map[string]string{"key": "NHI"},
+				},
+			}},
+			"isLast": true,
+		})
+	}))
+	defer srv.Close()
+
+	c := client.NewJiraClient(srv.URL, 5*time.Second)
+	got, err := c.SearchByLabel(context.Background(), testAuth())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "NHI-1", got[0].IssueKey)
+	require.Equal(t, "Stale account", got[0].Title)
+	require.Equal(t, "NHI", got[0].ProjectKey)
+	require.Equal(t, "https://acme.atlassian.net/browse/NHI-1", got[0].URL)
 }

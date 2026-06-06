@@ -83,25 +83,8 @@ CREATE TABLE integration_credentials (
 -- is no scan over those columns yet; add a composite if a prune job is added.)
 CREATE INDEX idx_cred_user_fk ON integration_credentials (user_id);
 
--- App-created tickets, so the "recent tickets" view lists exactly what was
--- created through IdentityHub (per project).
-CREATE TABLE created_tickets (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider    TEXT NOT NULL DEFAULT 'jira',
-    project_key TEXT NOT NULL,
-    issue_key   TEXT NOT NULL,
-    issue_url   TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
--- The recent-tickets query filters (tenant_id, user_id, project_key) and sorts
--- newest-first; this composite serves the filter AND the ORDER BY, and its
--- leading tenant_id covers the tenants FK cascade. user_id is indexed for the
--- users FK cascade (not the leading column above).
-CREATE INDEX idx_tickets_recent ON created_tickets (tenant_id, user_id, project_key, created_at DESC);
-CREATE INDEX idx_tickets_user_fk ON created_tickets (user_id);
+-- Note: the "recent tickets" view is a Redis cache of the Jira label search
+-- (Jira is the source of truth), so there is no Postgres tickets table.
 
 -- ---------------------------------------------------------------------------
 -- Row-Level Security. Policies match rows whose tenant_id equals the
@@ -117,7 +100,7 @@ $$;
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['users', 'api_tokens', 'integration_credentials', 'created_tickets']
+    FOREACH t IN ARRAY ARRAY['users', 'api_tokens', 'integration_credentials']
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format(

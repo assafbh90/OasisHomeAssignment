@@ -23,12 +23,10 @@ const (
 // fields consistent and queryable instead of ad-hoc strings per call site.
 const (
 	KeyError      = "error"
-	KeyEvent      = "event"
 	KeyRequestID  = "request_id"
 	KeyTenantID   = "tenant_id"
 	KeyUserID     = "user_id"
 	KeyAuthMethod = "auth_method"
-	KeyProvider   = "provider"
 	KeyMethod     = "method"
 	KeyPath       = "path"
 	KeyAddr       = "addr"

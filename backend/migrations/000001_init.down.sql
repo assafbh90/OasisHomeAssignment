@@ -1,7 +1,6 @@
 DROP FUNCTION IF EXISTS find_user_for_login(TEXT);
 DROP FUNCTION IF EXISTS find_api_token_by_hash(BYTEA);
 
-DROP TABLE IF EXISTS created_tickets;
 DROP TABLE IF EXISTS integration_credentials;
 DROP TABLE IF EXISTS api_tokens;
 DROP TABLE IF EXISTS users;

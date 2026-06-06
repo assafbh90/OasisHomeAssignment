@@ -9,6 +9,7 @@ export function TicketsPanel({ projects, onReconnect }: { projects: Project[]; o
   const [description, setDescription] = useState("");
   const [recent, setRecent] = useState<Ticket[]>([]);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "error" | "warn"; text: string; url?: string } | null>(null);
 
   const loadRecent = useCallback(async (key: string) => {
@@ -27,6 +28,25 @@ export function TicketsPanel({ projects, onReconnect }: { projects: Project[]; o
   useEffect(() => {
     loadRecent(projectKey);
   }, [projectKey, loadRecent]);
+
+  // refresh reconciles the tenant's cache against Jira (drift), then reloads.
+  async function refresh() {
+    setMsg(null);
+    setRefreshing(true);
+    try {
+      await api.post("/v1/integrations/jira/reconcile");
+      await loadRecent(projectKey);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.code === "reauth_required") {
+        setMsg({ kind: "warn", text: "Your Jira connection expired. Reconnect to continue." });
+        onReconnect();
+      } else {
+        setMsg({ kind: "error", text: "Failed to refresh from Jira." });
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,7 +68,7 @@ export function TicketsPanel({ projects, onReconnect }: { projects: Project[]; o
       await loadRecent(projectKey);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.code === "reauth_required") {
-        setMsg({ kind: "warn", text: "Your Jira connection expired. Reconnect to continue — your finding was saved and can be retried." });
+        setMsg({ kind: "warn", text: "Your Jira connection expired. Reconnect and try again." });
         onReconnect();
       } else if (err instanceof ApiError) {
         setMsg({ kind: "error", text: err.message });
@@ -122,9 +142,14 @@ export function TicketsPanel({ projects, onReconnect }: { projects: Project[]; o
       </section>
 
       <section className="card">
-        <h2>Recent tickets {projectKey && <span className="muted">· {projectKey}</span>}</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <h2>Recent tickets {projectKey && <span className="muted">· {projectKey}</span>}</h2>
+          <button type="button" className="link small" onClick={refresh} disabled={refreshing || !projectKey}>
+            {refreshing ? "Refreshing…" : "Refresh from Jira"}
+          </button>
+        </div>
         {recent.length === 0 ? (
-          <p className="muted">No tickets created from IdentityHub yet.</p>
+          <p className="muted">No IdentityHub tickets for this project yet. Try “Refresh from Jira”.</p>
         ) : (
           <ul className="ticket-list">
             {recent.map((t) => (

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -31,10 +32,12 @@ func (f fakeCreds) LoadCredential(context.Context, uuid.UUID, uuid.UUID, string)
 }
 
 type fakeClient struct {
-	ref         domain.TicketRef
-	err         error
-	createCalls int
-	lastAuth    domain.ClientAuth
+	ref          domain.TicketRef
+	err          error
+	createCalls  int
+	searchCalls  int
+	searchResult []domain.ProviderTicket
+	lastAuth     domain.ClientAuth
 }
 
 func (f *fakeClient) CreateIssue(_ context.Context, auth domain.ClientAuth, _ domain.TicketPayload) (domain.TicketRef, error) {
@@ -47,21 +50,53 @@ func (f *fakeClient) ListProjects(context.Context, domain.ClientAuth) ([]domain.
 	return []domain.ProjectRef{{Key: "NHI", Name: "NHI"}}, nil
 }
 
-type fakeTicketRepo struct{ saved *domain.CreatedTicket }
+func (f *fakeClient) SearchByLabel(_ context.Context, auth domain.ClientAuth) ([]domain.ProviderTicket, error) {
+	f.searchCalls++
+	f.lastAuth = auth
+	return f.searchResult, f.err
+}
 
-func (f *fakeTicketRepo) SaveTicket(_ context.Context, t *domain.CreatedTicket) error {
-	f.saved = t
+type fakeCache struct {
+	added    []domain.CreatedTicket
+	replaced []domain.CreatedTicket
+	list     []domain.CreatedTicket
+}
+
+func (f *fakeCache) Replace(_ context.Context, _ uuid.UUID, tickets []domain.CreatedTicket) error {
+	f.replaced = tickets
 	return nil
 }
 
-func (f *fakeTicketRepo) ListRecentByProject(context.Context, uuid.UUID, uuid.UUID, string, int) ([]domain.CreatedTicket, error) {
-	return nil, nil
+func (f *fakeCache) Add(_ context.Context, _ uuid.UUID, t domain.CreatedTicket) error {
+	f.added = append(f.added, t)
+	return nil
 }
 
-func newService(tokens ticketreport.TokenManager, creds ticketreport.CredentialReader, cl ticketreport.Client, tickets ticketreport.TicketRepository) *ticketreport.Service {
+func (f *fakeCache) ListByProject(context.Context, uuid.UUID, string, int) ([]domain.CreatedTicket, error) {
+	return f.list, nil
+}
+
+type fakeGate struct {
+	proceed  bool
+	finished bool
+}
+
+func (f *fakeGate) Begin(context.Context, uuid.UUID, bool) (bool, func(), error) {
+	return f.proceed, func() { f.finished = true }, nil
+}
+
+type deps struct {
+	tokens fakeTokens
+	creds  fakeCreds
+	client *fakeClient
+	cache  *fakeCache
+	gate   *fakeGate
+}
+
+func newService(d deps) *ticketreport.Service {
 	return ticketreport.NewService(ticketreport.Deps{
-		Provider: domain.ProviderJira, Tokens: tokens, Creds: creds,
-		Client: cl, Tickets: tickets,
+		Provider: domain.ProviderJira, Tokens: d.tokens, Creds: d.creds,
+		Client: d.client, Cache: d.cache, Gate: d.gate,
 	})
 }
 
@@ -71,37 +106,37 @@ func principal() domain.Identity {
 
 func TestService_CreateTicket_HappyPath(t *testing.T) {
 	t.Parallel()
-	conn := &fakeClient{ref: domain.TicketRef{Provider: domain.ProviderJira, IssueKey: "NHI-1", URL: "https://acme.atlassian.net/browse/NHI-1"}}
-	tickets := &fakeTicketRepo{}
+	client := &fakeClient{ref: domain.TicketRef{Provider: domain.ProviderJira, IssueKey: "NHI-1", URL: "https://acme.atlassian.net/browse/NHI-1"}}
+	cache := &fakeCache{}
 	creds := fakeCreds{cred: &domain.Credential{ExternalAccountID: "cloud-1", SiteURL: "https://acme.atlassian.net"}}
-	svc := newService(fakeTokens{token: "valid-at"}, creds, conn, tickets)
+	svc := newService(deps{tokens: fakeTokens{token: "valid-at"}, creds: creds, client: client, cache: cache, gate: &fakeGate{}})
 
 	ref, err := svc.CreateTicket(context.Background(), principal(), domain.TicketPayload{ProjectKey: "NHI", Title: "Stale account"})
 	require.NoError(t, err)
 	require.Equal(t, "NHI-1", ref.IssueKey)
 
 	// Client received assembled auth (it builds the API URL from the cloudid).
-	require.Equal(t, "valid-at", conn.lastAuth.AccessToken)
-	require.Equal(t, "cloud-1", conn.lastAuth.ExternalAccountID)
-	// Ticket recorded for the recent view.
-	require.NotNil(t, tickets.saved)
-	require.Equal(t, "NHI-1", tickets.saved.IssueKey)
+	require.Equal(t, "valid-at", client.lastAuth.AccessToken)
+	require.Equal(t, "cloud-1", client.lastAuth.ExternalAccountID)
+	// Ticket added to the cache so it shows immediately.
+	require.Len(t, cache.added, 1)
+	require.Equal(t, "NHI-1", cache.added[0].IssueKey)
 }
 
 func TestService_CreateTicket_ReauthSignals(t *testing.T) {
 	t.Parallel()
-	conn := &fakeClient{}
-	svc := newService(fakeTokens{err: domain.ErrReauthRequired}, fakeCreds{}, conn, &fakeTicketRepo{})
+	client := &fakeClient{}
+	svc := newService(deps{tokens: fakeTokens{err: domain.ErrReauthRequired}, client: client, cache: &fakeCache{}, gate: &fakeGate{}})
 
 	_, err := svc.CreateTicket(context.Background(), principal(), domain.TicketPayload{ProjectKey: "NHI", Title: "x"})
 
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
-	require.Zero(t, conn.createCalls, "no provider call on reauth")
+	require.Zero(t, client.createCalls, "no provider call on reauth")
 }
 
 func TestService_ListProjects_Reauth(t *testing.T) {
 	t.Parallel()
-	svc := newService(fakeTokens{err: domain.ErrReauthRequired}, fakeCreds{}, &fakeClient{}, &fakeTicketRepo{})
+	svc := newService(deps{tokens: fakeTokens{err: domain.ErrReauthRequired}, client: &fakeClient{}, cache: &fakeCache{}, gate: &fakeGate{}})
 
 	_, err := svc.ListProjects(context.Background(), principal())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
@@ -110,7 +145,7 @@ func TestService_ListProjects_Reauth(t *testing.T) {
 func TestService_ListProjects_HappyPath(t *testing.T) {
 	t.Parallel()
 	creds := fakeCreds{cred: &domain.Credential{ExternalAccountID: "cloud-1"}}
-	svc := newService(fakeTokens{token: "at"}, creds, &fakeClient{}, &fakeTicketRepo{})
+	svc := newService(deps{tokens: fakeTokens{token: "at"}, creds: creds, client: &fakeClient{}, cache: &fakeCache{}, gate: &fakeGate{}})
 
 	projects, err := svc.ListProjects(context.Background(), principal())
 	require.NoError(t, err)
@@ -118,23 +153,63 @@ func TestService_ListProjects_HappyPath(t *testing.T) {
 	require.Equal(t, "NHI", projects[0].Key)
 }
 
-func TestService_CreateTicket_ConnectorError(t *testing.T) {
+func TestService_CreateTicket_ClientError(t *testing.T) {
 	t.Parallel()
-	conn := &fakeClient{err: errors.New("jira 500")}
+	client := &fakeClient{err: errors.New("jira 500")}
 	creds := fakeCreds{cred: &domain.Credential{ExternalAccountID: "cloud-1"}}
-	tickets := &fakeTicketRepo{}
-	svc := newService(fakeTokens{token: "at"}, creds, conn, tickets)
+	cache := &fakeCache{}
+	svc := newService(deps{tokens: fakeTokens{token: "at"}, creds: creds, client: client, cache: cache, gate: &fakeGate{}})
 
 	_, err := svc.CreateTicket(context.Background(), principal(), domain.TicketPayload{ProjectKey: "NHI", Title: "x"})
 	require.Error(t, err)
 	require.NotErrorIs(t, err, domain.ErrReauthRequired)
-	require.Nil(t, tickets.saved, "nothing persisted when the provider call fails")
+	require.Empty(t, cache.added, "nothing cached when the provider call fails")
 }
 
 func TestService_ListRecentTickets(t *testing.T) {
 	t.Parallel()
-	svc := newService(fakeTokens{token: "at"}, fakeCreds{}, &fakeClient{}, &fakeTicketRepo{})
+	cache := &fakeCache{list: []domain.CreatedTicket{{IssueKey: "NHI-1", ProjectKey: "NHI"}}}
+	svc := newService(deps{tokens: fakeTokens{token: "at"}, client: &fakeClient{}, cache: cache, gate: &fakeGate{}})
+
 	got, err := svc.ListRecentTickets(context.Background(), principal(), "NHI", 10)
 	require.NoError(t, err)
-	require.Empty(t, got)
+	require.Len(t, got, 1)
+	require.Equal(t, "NHI-1", got[0].IssueKey)
+}
+
+func TestService_Reconcile_ReplacesCacheFromJira(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{searchResult: []domain.ProviderTicket{
+		{IssueKey: "NHI-1", Title: "one", ProjectKey: "NHI", URL: "u1", CreatedAt: time.Now()},
+		{IssueKey: "NHI-2", Title: "two", ProjectKey: "NHI", URL: "u2", CreatedAt: time.Now()},
+	}}
+	cache := &fakeCache{}
+	gate := &fakeGate{proceed: true}
+	creds := fakeCreds{cred: &domain.Credential{ExternalAccountID: "cloud-1"}}
+	svc := newService(deps{tokens: fakeTokens{token: "at"}, creds: creds, client: client, cache: cache, gate: gate})
+
+	require.NoError(t, svc.Reconcile(context.Background(), principal(), true))
+	require.Equal(t, 1, client.searchCalls)
+	require.Len(t, cache.replaced, 2)
+	require.Equal(t, "NHI-1", cache.replaced[0].IssueKey)
+	require.True(t, gate.finished, "gate must be released")
+}
+
+func TestService_Reconcile_SkippedByGate(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{}
+	cache := &fakeCache{}
+	svc := newService(deps{tokens: fakeTokens{token: "at"}, client: client, cache: cache, gate: &fakeGate{proceed: false}})
+
+	require.NoError(t, svc.Reconcile(context.Background(), principal(), false))
+	require.Zero(t, client.searchCalls, "skipped reconcile must not hit Jira")
+	require.Nil(t, cache.replaced)
+}
+
+func TestService_Reconcile_Reauth(t *testing.T) {
+	t.Parallel()
+	svc := newService(deps{tokens: fakeTokens{err: domain.ErrReauthRequired}, client: &fakeClient{}, cache: &fakeCache{}, gate: &fakeGate{proceed: true}})
+
+	err := svc.Reconcile(context.Background(), principal(), true)
+	require.ErrorIs(t, err, domain.ErrReauthRequired)
 }

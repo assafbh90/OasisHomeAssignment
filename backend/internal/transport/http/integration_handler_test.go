@@ -36,9 +36,10 @@ func (f fakeConn) DisconnectIntegration(context.Context, domain.Identity) error 
 }
 
 type fakeFindings struct {
-	createErr   error
-	projectsErr error
-	ref         domain.TicketRef
+	createErr    error
+	projectsErr  error
+	reconcileErr error
+	ref          domain.TicketRef
 }
 
 func (f fakeFindings) ListProjects(context.Context, domain.Identity) ([]domain.ProjectRef, error) {
@@ -54,6 +55,10 @@ func (f fakeFindings) CreateTicket(context.Context, domain.Identity, domain.Tick
 
 func (f fakeFindings) ListRecentTickets(context.Context, domain.Identity, string, int) ([]domain.CreatedTicket, error) {
 	return nil, nil
+}
+
+func (f fakeFindings) Reconcile(context.Context, domain.Identity, bool) error {
+	return f.reconcileErr
 }
 
 func integrationRouter(id domain.Identity, conn connectionService, find reportService) http.Handler {
@@ -96,6 +101,21 @@ func TestIntegration_CreateTicket_Reauth409(t *testing.T) {
 	rec := doJSON(r, http.MethodPost, "/v1/integrations/jira/tickets",
 		ticketRequest{ProjectKey: "NHI", Title: "x"}, cookies, headers)
 
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Contains(t, rec.Body.String(), "reauth_required")
+}
+
+func TestIntegration_Reconcile_OK(t *testing.T) {
+	r := integrationRouter(sessionID(), fakeConn{}, fakeFindings{})
+	cookies, headers := csrf()
+	rec := doJSON(r, http.MethodPost, "/v1/integrations/jira/reconcile", nil, cookies, headers)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestIntegration_Reconcile_Reauth409(t *testing.T) {
+	r := integrationRouter(sessionID(), fakeConn{}, fakeFindings{reconcileErr: domain.ErrReauthRequired})
+	cookies, headers := csrf()
+	rec := doJSON(r, http.MethodPost, "/v1/integrations/jira/reconcile", nil, cookies, headers)
 	require.Equal(t, http.StatusConflict, rec.Code)
 	require.Contains(t, rec.Body.String(), "reauth_required")
 }

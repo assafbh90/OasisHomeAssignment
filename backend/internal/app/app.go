@@ -42,8 +42,15 @@ const CmdSeed = "seed"
 // CmdScheduler runs the automation scheduler worker instead of the HTTP server.
 const CmdScheduler = "scheduler"
 
-// oauthStateTTL bounds how long a user has to complete the OAuth consent.
-const oauthStateTTL = 10 * time.Minute
+const (
+	// oauthStateTTL bounds how long a user has to complete the OAuth consent.
+	oauthStateTTL = 10 * time.Minute
+	// ticketCacheTTL bounds how long the tenant ticket cache lives before it must
+	// be repopulated from Jira on the next connect/refresh.
+	ticketCacheTTL = 24 * time.Hour
+	// reconcileWindow is the minimum interval between (unforced) reconciles per tenant.
+	reconcileWindow = 30 * time.Minute
+)
 
 // App holds the fully-wired dependencies shared by the server and subcommands.
 type App struct {
@@ -115,8 +122,7 @@ func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 	jiraProvider := oauth.NewJiraOAuthProvider(oauth.JiraConfig{
 		ClientID: cfg.Jira.ClientID, ClientSecret: cfg.Jira.ClientSecret, RedirectURI: cfg.Jira.RedirectURI,
 		Scopes: cfg.Jira.Scopes, AuthURL: cfg.Jira.AuthURL, TokenURL: cfg.Jira.TokenURL, APIBaseURL: cfg.Jira.APIBaseURL,
-		UsePKCE: cfg.Jira.UsePKCE, RotatesRefreshToken: cfg.Jira.RotatesRefreshToken,
-		InactivityWindow: cfg.Jira.InactivityWindow, HTTPTimeout: cfg.Jira.HTTPTimeout,
+		UsePKCE: cfg.Jira.UsePKCE, InactivityWindow: cfg.Jira.InactivityWindow, HTTPTimeout: cfg.Jira.HTTPTimeout,
 	})
 	jiraClient := client.NewJiraClient(cfg.Jira.APIBaseURL, cfg.Jira.HTTPTimeout)
 	tokenManager := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{
@@ -128,7 +134,7 @@ func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 	})
 	reportSvc := ticketreport.NewService(ticketreport.Deps{
 		Provider: jiraProvider.Name(), Tokens: tokenManager, Creds: repos.creds,
-		Client: jiraClient, Tickets: repos.tickets,
+		Client: jiraClient, Cache: redisStores.tickets, Gate: redisStores.reconcile,
 	})
 
 	// Automation (blog digest) subsystem.
@@ -200,7 +206,6 @@ type repos struct {
 	users   *store.PostgresUserRepository
 	tokens  *store.PostgresApiTokenRepository
 	creds   *store.PostgresCredentialRepository
-	tickets *store.PostgresTicketRepository
 }
 
 func newRepos(pool *pgxpool.Pool, cipher store.TokenCipher) repos {
@@ -209,24 +214,27 @@ func newRepos(pool *pgxpool.Pool, cipher store.TokenCipher) repos {
 		users:   store.NewPostgresUserRepository(pool),
 		tokens:  store.NewPostgresApiTokenRepository(pool),
 		creds:   store.NewPostgresCredentialRepository(pool, cipher),
-		tickets: store.NewPostgresTicketRepository(pool),
 	}
 }
 
 // redisAdapters groups the Redis-backed adapters.
 type redisAdapters struct {
-	sessions *redisstore.RedisSessionStore
-	tokens   *redisstore.RedisTokenCache
-	rate     *redisstore.RedisRateLimiter
-	state    *redisstore.RedisOAuthStateStore
+	sessions  *redisstore.RedisSessionStore
+	tokens    *redisstore.RedisTokenCache
+	rate      *redisstore.RedisRateLimiter
+	state     *redisstore.RedisOAuthStateStore
+	tickets   *redisstore.RedisTicketCache
+	reconcile *redisstore.RedisReconcileGate
 }
 
 func newRedisAdapters(redisClient *redis.Client, cfg config.Config) redisAdapters {
 	return redisAdapters{
-		sessions: redisstore.NewRedisSessionStore(redisClient),
-		tokens:   redisstore.NewRedisTokenCache(redisClient),
-		rate:     redisstore.NewRedisRateLimiter(redisClient, cfg.RateLimit.LoginMax, cfg.RateLimit.LoginWindow),
-		state:    redisstore.NewRedisOAuthStateStore(redisClient, oauthStateTTL),
+		sessions:  redisstore.NewRedisSessionStore(redisClient),
+		tokens:    redisstore.NewRedisTokenCache(redisClient),
+		rate:      redisstore.NewRedisRateLimiter(redisClient, cfg.RateLimit.LoginMax, cfg.RateLimit.LoginWindow),
+		state:     redisstore.NewRedisOAuthStateStore(redisClient, oauthStateTTL),
+		tickets:   redisstore.NewRedisTicketCache(redisClient, ticketCacheTTL),
+		reconcile: redisstore.NewRedisReconcileGate(redisClient, reconcileWindow),
 	}
 }
 

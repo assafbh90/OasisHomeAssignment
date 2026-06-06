@@ -55,7 +55,6 @@ func TestRespondError_Mapping(t *testing.T) {
 		{domain.ErrForbiddenScope, http.StatusForbidden, errCodeForbidden},
 		{domain.ErrTenantMismatch, http.StatusForbidden, errCodeForbidden},
 		{domain.ErrProviderNotSupported, http.StatusNotFound, errCodeProviderNotSupported},
-		{domain.ErrCapabilityNotSupported, http.StatusUnprocessableEntity, errCodeCapabilityNotSupported},
 		{domain.ErrCredentialNotFound, http.StatusNotFound, errCodeNotConnected},
 		{domain.ErrStateNotFound, http.StatusBadRequest, errCodeInvalidState},
 		{errors.New("boom"), http.StatusInternalServerError, errCodeInternal},
