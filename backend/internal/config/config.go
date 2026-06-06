@@ -16,17 +16,17 @@ import (
 
 // Config is the fully-resolved application configuration.
 type Config struct {
-	Env       string          `mapstructure:"env"`
-	HTTP      HTTPConfig      `mapstructure:"http"`
-	Pprof     PprofConfig     `mapstructure:"pprof"`
-	Postgres  PostgresConfig  `mapstructure:"postgres"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Session   SessionConfig   `mapstructure:"session"`
-	Argon2    Argon2Config    `mapstructure:"argon2"`
-	Crypto    CryptoConfig    `mapstructure:"crypto"`
-	APIToken  APITokenConfig  `mapstructure:"api_token"`
-	RateLimit RateLimitConfig `mapstructure:"ratelimit"`
-	Jira      JiraConfig      `mapstructure:"jira"`
+	Env        string           `mapstructure:"env"`
+	HTTP       HTTPConfig       `mapstructure:"http"`
+	Pprof      PprofConfig      `mapstructure:"pprof"`
+	Postgres   PostgresConfig   `mapstructure:"postgres"`
+	Redis      RedisConfig      `mapstructure:"redis"`
+	Session    SessionConfig    `mapstructure:"session"`
+	Argon2     Argon2Config     `mapstructure:"argon2"`
+	Crypto     CryptoConfig     `mapstructure:"crypto"`
+	APIToken   APITokenConfig   `mapstructure:"api_token"`
+	RateLimit  RateLimitConfig  `mapstructure:"ratelimit"`
+	Jira       JiraConfig       `mapstructure:"jira"`
 	Ollama     OllamaConfig     `mapstructure:"ollama"`
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
 	Automation AutomationConfig `mapstructure:"automation"`

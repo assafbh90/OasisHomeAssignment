@@ -67,7 +67,7 @@ func TestRunOnce_CreatesTicketsAndMarksSeen(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 0,
 	})
@@ -84,7 +84,7 @@ func TestRunOnce_RespectsCap(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a", "http://site/blog/b", "http://site/blog/c"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 		MaxPostsPerRun: 2,
 	})
@@ -98,7 +98,7 @@ func TestRunOnce_ReauthAbortsWithoutMarkingSeen(t *testing.T) {
 	tickets := &fakeTickets{err: domain.ErrReauthRequired}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
 	err := svc.RunOnce(context.Background(), testAutomation())
@@ -111,11 +111,10 @@ func TestRunOnce_ScrapeFailureSkipsPostButContinues(t *testing.T) {
 	tickets := &fakeTickets{}
 	seen := &fakeSeen{}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{err: errors.New("boom")}, Summ: fakeSumm{}, Tickets: tickets, Seen: seen,
 	})
 	require.NoError(t, svc.RunOnce(context.Background(), testAutomation()))
 	require.Empty(t, tickets.created)
 	require.Empty(t, seen.added) // not marked seen -> retried next run
 }
-

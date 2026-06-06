@@ -46,12 +46,16 @@ func (r *fakeRepo) Complete(_ context.Context, _, id uuid.UUID, next time.Time, 
 }
 
 // unused Repository methods (scheduler only needs ClaimDue/Complete).
-func (r *fakeRepo) Create(context.Context, *domain.Automation) error                     { return nil }
-func (r *fakeRepo) Get(context.Context, uuid.UUID, uuid.UUID) (domain.Automation, error) { return domain.Automation{}, nil }
-func (r *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]domain.Automation, error) { return nil, nil }
-func (r *fakeRepo) Update(context.Context, *domain.Automation) error                     { return nil }
-func (r *fakeRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error                   { return nil }
-func (r *fakeRepo) SetDue(context.Context, uuid.UUID, uuid.UUID, time.Time) error        { return nil }
+func (r *fakeRepo) Create(context.Context, *domain.Automation) error { return nil }
+func (r *fakeRepo) Get(context.Context, uuid.UUID, uuid.UUID) (domain.Automation, error) {
+	return domain.Automation{}, nil
+}
+func (r *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]domain.Automation, error) {
+	return nil, nil
+}
+func (r *fakeRepo) Update(context.Context, *domain.Automation) error              { return nil }
+func (r *fakeRepo) Delete(context.Context, uuid.UUID, uuid.UUID) error            { return nil }
+func (r *fakeRepo) SetDue(context.Context, uuid.UUID, uuid.UUID, time.Time) error { return nil }
 
 func TestScheduler_RunDue_RunsAndCompletes(t *testing.T) {
 	t.Parallel()
@@ -60,7 +64,7 @@ func TestScheduler_RunDue_RunsAndCompletes(t *testing.T) {
 	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
 	tickets := &fakeTickets{}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{}, Tickets: tickets, Seen: &fakeSeen{},
 	})
 	fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -84,7 +88,7 @@ func TestScheduler_RunDue_RecordsError(t *testing.T) {
 	a.Interval = time.Hour
 	repo := &fakeRepo{batches: [][]domain.Automation{{a}}}
 	svc := automation.NewService(automation.Deps{
-		Disc: fakeDisc{urls: []string{"http://site/blog/a"}},
+		Disc:    fakeDisc{urls: []string{"http://site/blog/a"}},
 		Scraper: fakeScraper{}, Summ: fakeSumm{},
 		Tickets: &fakeTickets{err: domain.ErrReauthRequired}, Seen: &fakeSeen{},
 	})
