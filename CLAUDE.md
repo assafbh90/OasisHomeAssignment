@@ -65,10 +65,11 @@ from its name alone — not from its type or surrounding code.
   named predicate. Single, already-obvious comparisons stay inline.
 - **Filename reflects the file's primary type/responsibility.** When you rename the
   main type or change what a file is about, rename the file to match with `git mv`
-  (preserve history): `RedisReconcileGate` in `reconcilegate.go`; if it became
-  `RedisReconcileThrottle`, the file becomes `reconcilethrottle.go` and its test
-  `reconcilethrottle_test.go`. Keep Go's lowercase, no-underscore filename style,
-  and keep each `_test.go` named for the file it tests.
+  (preserve history): `ReactiveTokenManager` in `reactive_token_manager.go`; if a
+  type were renamed the file follows. Filenames are lowercase `snake_case` for
+  multi-word names (e.g. `auth_handler.go`, `reactive_token_manager.go`); avoid only
+  the suffixes Go reads as build constraints (`_test`, `_<GOOS>`, `_<GOARCH>`). Keep
+  each `_test.go` named for the file it tests.
 
 ## Go style
 
