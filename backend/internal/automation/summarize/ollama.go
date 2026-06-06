@@ -48,11 +48,12 @@ func New(baseURL, model string, timeout time.Duration, maxInput int) *Ollama {
 // to ADF. %s is the page title; %s is the (truncated) content.
 const promptTemplate = `You extract metadata and write a detailed summary of an article for a Jira ticket.
 
-Return ONLY a single JSON object with exactly these string fields:
+Return ONLY a single JSON object whose values are ALL plain strings (never nested
+objects or arrays), with exactly these fields:
   "title":   the article headline, cleaned of any site name or section suffix
   "source":  the publication or website name (e.g. "Oasis Security")
   "type":    the content type in one lowercase word (e.g. guide, blog, article, news)
-  "summary": a thorough summary (see rules)
+  "summary": a thorough summary as a single string (see rules)
 
 Rules for "summary":
   - Cover the article in depth: an opening paragraph with the main thesis, then the
@@ -83,12 +84,26 @@ type generateResponse struct {
 	Response string `json:"response"`
 }
 
-// modelSummary is the JSON shape the model is asked to emit (in Response).
+// modelSummary is the JSON shape the model is asked to emit (in Response). Fields
+// are RawMessage, not string: small models sometimes emit a nested object/array
+// for a field (e.g. echoing the prompt as a "summary" object). jsonText coerces
+// each field and ignores anything that isn't a plain string, so a misbehaving
+// field never leaks raw JSON into a ticket.
 type modelSummary struct {
-	Title   string `json:"title"`
-	Source  string `json:"source"`
-	Type    string `json:"type"`
-	Summary string `json:"summary"`
+	Title   json.RawMessage `json:"title"`
+	Source  json.RawMessage `json:"source"`
+	Type    json.RawMessage `json:"type"`
+	Summary json.RawMessage `json:"summary"`
+}
+
+// jsonText returns the trimmed string value of raw if it is a JSON string, and
+// "" for anything else (object, array, number, null, or absent).
+func jsonText(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
 }
 
 // Summarize returns a structured summary of the post. pageTitle is the scraped
@@ -130,31 +145,34 @@ func (o *Ollama) Summarize(ctx context.Context, pageTitle, markdown string) (dom
 	return parseSummary(out.Response, pageTitle)
 }
 
-// parseSummary turns the model's JSON response into a PostSummary. If the model
-// did not produce parseable JSON (small models occasionally don't), it falls back
-// to treating the whole response as the summary body with the page title.
+// parseSummary turns the model's JSON response into a PostSummary. A usable
+// summary string is required: if the model returned no parseable JSON, or emitted
+// "summary" as a non-string (a nested object/array — which some small models do
+// intermittently), it returns an error so the caller skips the post and retries
+// next run, rather than filing a ticket full of raw JSON.
 func parseSummary(response, pageTitle string) (domain.PostSummary, error) {
 	raw := strings.TrimSpace(response)
-	var m modelSummary
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		if raw == "" {
-			return domain.PostSummary{}, fmt.Errorf("ollama returned an empty summary")
-		}
-		return domain.PostSummary{Title: pageTitle, Body: raw}, nil
+	if raw == "" {
+		return domain.PostSummary{}, fmt.Errorf("ollama returned an empty response")
 	}
 
-	body := strings.TrimSpace(m.Summary)
-	if body == "" {
-		return domain.PostSummary{}, fmt.Errorf("ollama returned an empty summary")
+	var m modelSummary
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return domain.PostSummary{}, fmt.Errorf("ollama response was not valid JSON: %w", err)
 	}
-	title := strings.TrimSpace(m.Title)
+
+	body := jsonText(m.Summary)
+	if body == "" {
+		return domain.PostSummary{}, fmt.Errorf("ollama summary was missing or not a string")
+	}
+	title := jsonText(m.Title)
 	if title == "" {
 		title = pageTitle
 	}
 	return domain.PostSummary{
 		Title:  title,
-		Source: strings.TrimSpace(m.Source),
-		Type:   strings.TrimSpace(m.Type),
+		Source: jsonText(m.Source),
+		Type:   jsonText(m.Type),
 		Body:   body,
 	}, nil
 }

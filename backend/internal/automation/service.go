@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -154,6 +155,9 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 			log.Warn("summarize post failed", logging.Err(err))
 			continue
 		}
+		if summary.Source == "" {
+			summary.Source = sourceFromURL(postURL) // keep the "[source] ..." title shape
+		}
 		_, err = s.tickets.CreateTicket(ctx, principal, domain.TicketPayload{
 			ProjectKey:  a.ProjectKey,
 			Title:       composeTitle(summary, title),
@@ -218,6 +222,17 @@ func composeDescription(sum domain.PostSummary, postURL string) string {
 	b.WriteString(linkLabel)
 	b.WriteString(postURL)
 	return b.String()
+}
+
+// sourceFromURL derives a fallback source name from a URL host (stripping a
+// leading "www.") so the ticket title keeps its "[source] (type) title" shape when
+// the summarizer didn't supply a source.
+func sourceFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(u.Host, "www.")
 }
 
 func truncate(s string, n int) string {

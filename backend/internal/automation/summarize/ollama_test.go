@@ -50,16 +50,32 @@ func TestOllama_Summarize(t *testing.T) {
 	require.NotContains(t, gotPrompt, strings.Repeat("x", 60)) // input truncated to ~maxInput
 }
 
-func TestOllama_Summarize_FallbackOnNonJSON(t *testing.T) {
+// Some small models intermittently emit "summary" as a nested object (echoing the
+// prompt) instead of a string. That must be rejected — not rendered as raw JSON in
+// a ticket — so the post is skipped and retried next run.
+func TestOllama_Summarize_RejectsNonStringSummary(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"response": "  just plain prose  "})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"response": `{"title":"T","source":"S","type":"guide","summary":{"echoed prompt":-1}}`,
+		})
 	}))
 	defer srv.Close()
 
 	o := summarize.New(srv.URL, "m", 10*time.Second, 0)
-	out, err := o.Summarize(context.Background(), "Page Title", "body")
-	require.NoError(t, err)
-	require.Equal(t, "Page Title", out.Title) // falls back to the page title
-	require.Equal(t, "just plain prose", out.Body)
+	_, err := o.Summarize(context.Background(), "Page Title", "body")
+	require.Error(t, err)
+}
+
+// A non-JSON response (the model ignored format=json) is an error, not a ticket.
+func TestOllama_Summarize_RejectsNonJSON(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"response": "just plain prose"})
+	}))
+	defer srv.Close()
+
+	o := summarize.New(srv.URL, "m", 10*time.Second, 0)
+	_, err := o.Summarize(context.Background(), "Page Title", "body")
+	require.Error(t, err)
 }
