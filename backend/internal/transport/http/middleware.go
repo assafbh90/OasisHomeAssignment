@@ -80,13 +80,13 @@ func Recovery() gin.HandlerFunc {
 // deployment is behind TLS (cookieSecure mirrors that).
 func SecureHeaders(tlsEnabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		h := c.Writer.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		header := c.Writer.Header()
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("X-Frame-Options", "DENY")
+		header.Set("Referrer-Policy", "no-referrer")
+		header.Set("Cross-Origin-Opener-Policy", "same-origin")
 		if tlsEnabled {
-			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		c.Next()
 	}
@@ -131,7 +131,7 @@ func RequireScope(scope string) gin.HandlerFunc {
 func RequireSessionMethod() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := mustIdentity(c)
-		if !ok || id.AuthMethod != domain.AuthMethodSession {
+		if !ok || !id.IsSession() {
 			respondError(c, domain.ErrForbiddenScope)
 			c.Abort()
 			return
@@ -170,18 +170,18 @@ func CSRF() gin.HandlerFunc {
 // so this is only needed when the SPA runs on a different origin in dev.
 func CORS(allowed []string) gin.HandlerFunc {
 	allow := make(map[string]bool, len(allowed))
-	for _, o := range allowed {
-		allow[o] = true
+	for _, allowedOrigin := range allowed {
+		allow[allowedOrigin] = true
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		if origin != "" && allow[origin] {
-			h := c.Writer.Header()
-			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Vary", "Origin")
-			h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+headerCSRFToken)
-			h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			header := c.Writer.Header()
+			header.Set("Access-Control-Allow-Origin", origin)
+			header.Set("Access-Control-Allow-Credentials", "true")
+			header.Set("Vary", "Origin")
+			header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+headerCSRFToken)
+			header.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		}
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

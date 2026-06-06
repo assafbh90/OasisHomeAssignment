@@ -40,39 +40,39 @@ type TicketCache interface {
 	ListByProject(ctx context.Context, tenantID uuid.UUID, projectKey string, limit int) ([]domain.CreatedTicket, error)
 }
 
-// ReconcileGate throttles + single-flights reconciliation per tenant. Begin
-// reports whether to proceed; finish releases the lock and stamps the throttle.
+// ReconcileGate throttles + single-flights reconciliation per tenant. TryAcquire
+// reports whether to proceed; release frees the lock and stamps the throttle.
 type ReconcileGate interface {
-	Begin(ctx context.Context, tenantID uuid.UUID, force bool) (proceed bool, finish func(), err error)
+	TryAcquire(ctx context.Context, tenantID uuid.UUID, force bool) (proceed bool, release func(), err error)
 }
 
 // Service implements the NHI finding-ticket use cases.
 type Service struct {
-	provider string
-	tokens   TokenManager
-	creds    CredentialReader
-	client   Client
-	cache    TicketCache
-	gate     ReconcileGate
+	providerName   string
+	tokenManager   TokenManager
+	credentials    CredentialReader
+	providerClient Client
+	ticketCache    TicketCache
+	reconcileGate  ReconcileGate
 }
 
 // Deps are the collaborators of a Service. Passing them as a struct (rather than
 // a long positional parameter list) keeps call sites self-documenting and makes
 // it impossible to silently transpose the several same-typed deps.
 type Deps struct {
-	Provider string
-	Tokens   TokenManager
-	Creds    CredentialReader
-	Client   Client
-	Cache    TicketCache
-	Gate     ReconcileGate
+	ProviderName   string
+	TokenManager   TokenManager
+	Credentials    CredentialReader
+	ProviderClient Client
+	TicketCache    TicketCache
+	ReconcileGate  ReconcileGate
 }
 
 // NewService constructs the service from its dependencies.
 func NewService(d Deps) *Service {
 	return &Service{
-		provider: d.Provider, tokens: d.Tokens, creds: d.Creds,
-		client: d.Client, cache: d.Cache, gate: d.Gate,
+		providerName: d.ProviderName, tokenManager: d.TokenManager, credentials: d.Credentials,
+		providerClient: d.ProviderClient, ticketCache: d.TicketCache, reconcileGate: d.ReconcileGate,
 	}
 }
 
@@ -83,7 +83,7 @@ func (s *Service) ListProjects(ctx context.Context, principal domain.Identity) (
 	if err != nil {
 		return nil, err
 	}
-	return s.client.ListProjects(ctx, auth)
+	return s.providerClient.ListProjects(ctx, auth)
 }
 
 // CreateTicket creates an NHI finding ticket (tagged with the IdentityHub label)
@@ -95,21 +95,21 @@ func (s *Service) CreateTicket(ctx context.Context, principal domain.Identity, p
 		return domain.TicketRef{}, err
 	}
 
-	ref, err := s.client.CreateIssue(ctx, auth, payload)
+	ref, err := s.providerClient.CreateIssue(ctx, auth, payload)
 	if err != nil {
 		return domain.TicketRef{}, err
 	}
 
 	ticket := domain.CreatedTicket{
 		TenantID:   principal.TenantID,
-		Provider:   s.provider,
+		Provider:   s.providerName,
 		ProjectKey: payload.ProjectKey,
 		IssueKey:   ref.IssueKey,
 		IssueURL:   ref.URL,
 		Title:      payload.Title,
 		CreatedAt:  time.Now(),
 	}
-	if err := s.cache.Add(ctx, principal.TenantID, ticket); err != nil {
+	if err := s.ticketCache.Add(ctx, principal.TenantID, ticket); err != nil {
 		// The ticket exists in Jira; failing to cache it only delays it appearing
 		// in the recent view until the next reconcile. Log and return the ref.
 		logging.FromContext(ctx).Warn("cache created ticket failed", logging.Err(err))
@@ -120,27 +120,27 @@ func (s *Service) CreateTicket(ctx context.Context, principal domain.Identity, p
 // ListRecentTickets returns the tenant's cached IdentityHub tickets for a project
 // (no provider call). The cache is kept fresh by Reconcile.
 func (s *Service) ListRecentTickets(ctx context.Context, principal domain.Identity, projectKey string, limit int) ([]domain.CreatedTicket, error) {
-	return s.cache.ListByProject(ctx, principal.TenantID, projectKey, limit)
+	return s.ticketCache.ListByProject(ctx, principal.TenantID, projectKey, limit)
 }
 
 // Reconcile refreshes the tenant's ticket cache from Jira's IdentityHub label
 // search (Jira is the source of truth). It is throttled + single-flighted by the
 // gate; when skipped it returns nil. force bypasses the throttle (refresh button).
 func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, force bool) error {
-	proceed, finish, err := s.gate.Begin(ctx, principal.TenantID, force)
+	proceed, release, err := s.reconcileGate.TryAcquire(ctx, principal.TenantID, force)
 	if err != nil {
 		return err
 	}
 	if !proceed {
 		return nil // reconciled recently, or another reconcile is in flight
 	}
-	defer finish()
+	defer release()
 
 	auth, err := s.resolveAuth(ctx, principal)
 	if err != nil {
 		return err
 	}
-	found, err := s.client.SearchByLabel(ctx, auth)
+	found, err := s.providerClient.SearchByLabel(ctx, auth)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 	tickets := lo.Map(found, func(t domain.ProviderTicket, _ int) domain.CreatedTicket {
 		return domain.CreatedTicket{
 			TenantID:   principal.TenantID,
-			Provider:   s.provider,
+			Provider:   s.providerName,
 			ProjectKey: t.ProjectKey,
 			IssueKey:   t.IssueKey,
 			IssueURL:   t.URL,
@@ -156,7 +156,7 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 			CreatedAt:  t.CreatedAt,
 		}
 	})
-	return s.cache.Replace(ctx, principal.TenantID, tickets)
+	return s.ticketCache.Replace(ctx, principal.TenantID, tickets)
 }
 
 // EnsureConnected reports whether the principal's provider connection is usable
@@ -164,17 +164,17 @@ func (s *Service) Reconcile(ctx context.Context, principal domain.Identity, forc
 // no provider API call beyond a possible token refresh, so callers (e.g. the
 // automation runner) can cheaply check before doing expensive work.
 func (s *Service) EnsureConnected(ctx context.Context, principal domain.Identity) error {
-	_, err := s.tokens.FetchValidToken(ctx, principal.TenantID, principal.UserID)
+	_, err := s.tokenManager.FetchValidToken(ctx, principal.TenantID, principal.UserID)
 	return err
 }
 
 // resolveAuth fetches a valid token + credential and assembles ClientAuth.
 func (s *Service) resolveAuth(ctx context.Context, principal domain.Identity) (domain.ClientAuth, error) {
-	token, err := s.tokens.FetchValidToken(ctx, principal.TenantID, principal.UserID)
+	token, err := s.tokenManager.FetchValidToken(ctx, principal.TenantID, principal.UserID)
 	if err != nil {
 		return domain.ClientAuth{}, err
 	}
-	cred, err := s.creds.LoadCredential(ctx, principal.TenantID, principal.UserID, s.provider)
+	cred, err := s.credentials.LoadCredential(ctx, principal.TenantID, principal.UserID, s.providerName)
 	if err != nil {
 		return domain.ClientAuth{}, err
 	}

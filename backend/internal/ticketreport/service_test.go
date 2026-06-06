@@ -81,7 +81,7 @@ type fakeGate struct {
 	finished bool
 }
 
-func (f *fakeGate) Begin(context.Context, uuid.UUID, bool) (bool, func(), error) {
+func (f *fakeGate) TryAcquire(context.Context, uuid.UUID, bool) (bool, func(), error) {
 	return f.proceed, func() { f.finished = true }, nil
 }
 
@@ -95,8 +95,8 @@ type deps struct {
 
 func newService(d deps) *ticketreport.Service {
 	return ticketreport.NewService(ticketreport.Deps{
-		Provider: domain.ProviderJira, Tokens: d.tokens, Creds: d.creds,
-		Client: d.client, Cache: d.cache, Gate: d.gate,
+		ProviderName: domain.ProviderJira, TokenManager: d.tokens, Credentials: d.creds,
+		ProviderClient: d.client, TicketCache: d.cache, ReconcileGate: d.gate,
 	})
 }
 

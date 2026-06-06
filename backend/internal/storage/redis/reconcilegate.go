@@ -33,11 +33,11 @@ func NewRedisReconcileGate(client *goredis.Client, window time.Duration) *RedisR
 	return &RedisReconcileGate{client: client, window: window}
 }
 
-// Begin reports whether the caller should reconcile now. When force is false it
-// skips if a reconcile happened within the window. It then takes a single-flight
-// lock; only one concurrent caller proceeds. finish() stamps the throttle and
-// releases the lock; when proceed is false, finish is a no-op.
-func (g *RedisReconcileGate) Begin(ctx context.Context, tenantID uuid.UUID, force bool) (bool, func(), error) {
+// TryAcquire reports whether the caller should reconcile now. When force is false
+// it skips if a reconcile happened within the window. It then takes a single-flight
+// lock; only one concurrent caller acquires it. The returned release() stamps the
+// throttle and frees the lock; when proceed is false, release is a no-op.
+func (g *RedisReconcileGate) TryAcquire(ctx context.Context, tenantID uuid.UUID, force bool) (proceed bool, release func(), err error) {
 	noop := func() {}
 	lastKey := reconcileLastPrefix + tenantID.String()
 	lockKey := reconcileLockPrefix + tenantID.String()
@@ -64,9 +64,9 @@ func (g *RedisReconcileGate) Begin(ctx context.Context, tenantID uuid.UUID, forc
 		return false, noop, nil // another reconcile is in flight
 	}
 
-	finish := func() {
+	release = func() {
 		_ = g.client.Set(ctx, lastKey, "1", g.window).Err()
 		_ = g.client.Del(ctx, lockKey).Err()
 	}
-	return true, finish, nil
+	return true, release, nil
 }

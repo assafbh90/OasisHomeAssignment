@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/assafbh/identityhub/internal/domain"
+	"github.com/assafbh/identityhub/internal/httpconst"
 )
 
 const (
@@ -25,19 +26,19 @@ const (
 
 // Ollama is a thin client for the Ollama /api/generate endpoint.
 type Ollama struct {
-	baseURL  string
-	model    string
-	http     *http.Client
-	maxInput int
+	baseURL       string
+	model         string
+	http          *http.Client
+	maxInputChars int
 }
 
-// New constructs the client. maxInput caps the markdown characters sent.
-func New(baseURL, model string, timeout time.Duration, maxInput int) *Ollama {
+// New constructs the client. maxInputChars caps the markdown characters sent.
+func New(baseURL, model string, timeout time.Duration, maxInputChars int) *Ollama {
 	return &Ollama{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    model,
-		http:     &http.Client{Timeout: timeout},
-		maxInput: maxInput,
+		baseURL:       strings.TrimRight(baseURL, "/"),
+		model:         model,
+		http:          &http.Client{Timeout: timeout},
+		maxInputChars: maxInputChars,
 	}
 }
 
@@ -111,8 +112,8 @@ func jsonText(raw json.RawMessage) string {
 // fallback if the model omits a clean title.
 func (o *Ollama) Summarize(ctx context.Context, pageTitle, markdown string) (domain.PostSummary, error) {
 	in := markdown
-	if o.maxInput > 0 && len(in) > o.maxInput {
-		in = in[:o.maxInput]
+	if o.maxInputChars > 0 && len(in) > o.maxInputChars {
+		in = in[:o.maxInputChars]
 	}
 	reqBody, err := json.Marshal(generateRequest{
 		Model:  o.model,
@@ -134,7 +135,7 @@ func (o *Ollama) Summarize(ctx context.Context, pageTitle, markdown string) (dom
 		return domain.PostSummary{}, fmt.Errorf("ollama request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !httpconst.IsSuccessStatus(resp.StatusCode) {
 		return domain.PostSummary{}, fmt.Errorf("ollama returned %d", resp.StatusCode)
 	}
 	var out generateResponse

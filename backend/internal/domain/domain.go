@@ -74,10 +74,21 @@ func (i Identity) BelongsToTenant(t uuid.UUID) bool {
 	return i.TenantID != uuid.Nil && i.TenantID == t
 }
 
+// IsSamePrincipal reports whether this identity is the same tenant+user as the
+// given pair. Used to confirm an OAuth callback's bound principal matches the
+// caller (anti "callback bound to the wrong user").
+func (i Identity) IsSamePrincipal(tenantID, userID uuid.UUID) bool {
+	return i.TenantID == tenantID && i.UserID == userID
+}
+
+// IsSession reports whether the identity was authenticated via an interactive
+// browser session (as opposed to a machine API token).
+func (i Identity) IsSession() bool { return i.AuthMethod == AuthMethodSession }
+
 // HasScope reports whether the identity carries scope s. Interactive sessions
 // are treated as full-scope for their user (role model is out of PoC scope).
 func (i Identity) HasScope(s string) bool {
-	if i.AuthMethod == AuthMethodSession {
+	if i.IsSession() {
 		return true
 	}
 	return slices.Contains(i.Scopes, s)

@@ -25,12 +25,12 @@ type automationService interface {
 
 // AutomationHandler serves the automation CRUD + run-now endpoints.
 type AutomationHandler struct {
-	svc automationService
+	automations automationService
 }
 
 // NewAutomationHandler constructs the handler.
-func NewAutomationHandler(svc automationService) *AutomationHandler {
-	return &AutomationHandler{svc: svc}
+func NewAutomationHandler(automations automationService) *AutomationHandler {
+	return &AutomationHandler{automations: automations}
 }
 
 // List returns the tenant's automations.
@@ -44,7 +44,7 @@ func NewAutomationHandler(svc automationService) *AutomationHandler {
 // @Router   /v1/automations [get]
 func (h *AutomationHandler) List(c *gin.Context) {
 	id, _ := mustIdentity(c)
-	items, err := h.svc.List(c.Request.Context(), id)
+	items, err := h.automations.List(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -80,7 +80,7 @@ func (h *AutomationHandler) Create(c *gin.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	a, err := h.svc.Create(c.Request.Context(), id, automation.CreateInput{
+	a, err := h.automations.Create(c.Request.Context(), id, automation.CreateInput{
 		Name:       req.Name,
 		SiteURL:    req.SiteURL,
 		ProjectKey: req.ProjectKey,
@@ -112,7 +112,7 @@ func (h *AutomationHandler) Get(c *gin.Context) {
 		respondValidation(c, "invalid automation id")
 		return
 	}
-	a, err := h.svc.Get(c.Request.Context(), id, aid)
+	a, err := h.automations.Get(c.Request.Context(), id, aid)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -152,10 +152,10 @@ func (h *AutomationHandler) Update(c *gin.Context) {
 	}
 	in := automation.UpdateInput{Name: &req.Name, SiteURL: &req.SiteURL, ProjectKey: &req.ProjectKey, Enabled: req.Enabled}
 	if req.IntervalSeconds != 0 {
-		d := time.Duration(req.IntervalSeconds) * time.Second
-		in.Interval = &d
+		interval := time.Duration(req.IntervalSeconds) * time.Second
+		in.Interval = &interval
 	}
-	a, err := h.svc.Update(c.Request.Context(), id, aid, in)
+	a, err := h.automations.Update(c.Request.Context(), id, aid, in)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -180,7 +180,7 @@ func (h *AutomationHandler) Delete(c *gin.Context) {
 		respondValidation(c, "invalid automation id")
 		return
 	}
-	if err := h.svc.Delete(c.Request.Context(), id, aid); err != nil {
+	if err := h.automations.Delete(c.Request.Context(), id, aid); err != nil {
 		respondError(c, err)
 		return
 	}
@@ -204,7 +204,7 @@ func (h *AutomationHandler) RunNow(c *gin.Context) {
 		respondValidation(c, "invalid automation id")
 		return
 	}
-	if err := h.svc.RunNow(c.Request.Context(), id, aid); err != nil {
+	if err := h.automations.RunNow(c.Request.Context(), id, aid); err != nil {
 		respondError(c, err)
 		return
 	}

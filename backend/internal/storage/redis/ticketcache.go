@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/samber/lo"
 
 	"github.com/assafbh/identityhub/internal/domain"
 )
@@ -47,13 +48,10 @@ func (c *RedisTicketCache) Add(ctx context.Context, tenantID uuid.UUID, ticket d
 	if _, err := getJSON(ctx, c.client, ticketCacheKey(tenantID), &existing); err != nil {
 		return err
 	}
-	out := []domain.CreatedTicket{ticket}
-	for _, t := range existing {
-		if t.IssueKey != ticket.IssueKey {
-			out = append(out, t)
-		}
-	}
-	return c.Replace(ctx, tenantID, out)
+	deduped := lo.Filter(existing, func(existingTicket domain.CreatedTicket, _ int) bool {
+		return existingTicket.IssueKey != ticket.IssueKey
+	})
+	return c.Replace(ctx, tenantID, append([]domain.CreatedTicket{ticket}, deduped...))
 }
 
 // ListByProject returns the cached tickets for a project, newest-first, limited.
@@ -63,12 +61,9 @@ func (c *RedisTicketCache) ListByProject(ctx context.Context, tenantID uuid.UUID
 	if _, err := getJSON(ctx, c.client, ticketCacheKey(tenantID), &tickets); err != nil {
 		return nil, err
 	}
-	out := make([]domain.CreatedTicket, 0, len(tickets))
-	for _, t := range tickets {
-		if t.ProjectKey == projectKey {
-			out = append(out, t)
-		}
-	}
+	out := lo.Filter(tickets, func(ticket domain.CreatedTicket, _ int) bool {
+		return ticket.ProjectKey == projectKey
+	})
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]

@@ -10,8 +10,8 @@ import (
 // reuses the same wiring as the API; only the entrypoint differs.
 func (a *App) RunScheduler(ctx context.Context) error {
 	sched := automation.NewScheduler(automation.SchedulerDeps{
-		Service: a.autoSvc,
-		Repo:    a.autoRepo,
+		Service: a.automationService,
+		Repo:    a.automationRepo,
 		Tick:    a.cfg.Scheduler.Tick,
 		Batch:   a.cfg.Scheduler.ClaimBatch,
 		Lease:   a.cfg.Scheduler.Lease,

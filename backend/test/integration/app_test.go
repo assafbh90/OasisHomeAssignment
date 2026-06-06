@@ -39,7 +39,7 @@ func TestApp_CompositionRoot(t *testing.T) {
 	cfg, err := config.Load("")
 	require.NoError(t, err)
 
-	a, err := app.Wire(ctx, cfg, logging.New("dev", "error"))
+	a, err := app.Build(ctx, cfg, logging.New("dev", "error"))
 	require.NoError(t, err)
 	defer a.Close()
 

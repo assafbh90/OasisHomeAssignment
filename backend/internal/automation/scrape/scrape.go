@@ -12,6 +12,8 @@ import (
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	readability "github.com/go-shiori/go-readability"
+
+	"github.com/assafbh/identityhub/internal/httpconst"
 )
 
 // Scraper fetches and converts post pages.
@@ -38,7 +40,7 @@ func (s *Scraper) Scrape(ctx context.Context, pageURL string) (title string, mar
 		return "", "", fmt.Errorf("fetch post: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !httpconst.IsSuccessStatus(resp.StatusCode) {
 		return "", "", fmt.Errorf("fetch post %s: status %d", pageURL, resp.StatusCode)
 	}
 

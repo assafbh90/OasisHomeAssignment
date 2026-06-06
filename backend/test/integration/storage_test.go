@@ -198,22 +198,22 @@ func TestRedisStores(t *testing.T) {
 		gate := redisstore.NewRedisReconcileGate(redisClient, time.Minute)
 		tid := uuid.New()
 
-		ok1, finish1, err := gate.Begin(ctx, tid, false)
+		ok1, release1, err := gate.TryAcquire(ctx, tid, false)
 		require.NoError(t, err)
 		require.True(t, ok1, "first caller proceeds")
 
-		ok2, _, err := gate.Begin(ctx, tid, false)
+		ok2, _, err := gate.TryAcquire(ctx, tid, false)
 		require.NoError(t, err)
 		require.False(t, ok2, "concurrent caller is locked out (single-flight)")
 
-		finish1() // release lock + stamp throttle
+		release1() // release lock + stamp throttle
 
-		ok3, _, _ := gate.Begin(ctx, tid, false)
+		ok3, _, _ := gate.TryAcquire(ctx, tid, false)
 		require.False(t, ok3, "throttled within the window")
 
-		ok4, finish4, _ := gate.Begin(ctx, tid, true)
+		ok4, release4, _ := gate.TryAcquire(ctx, tid, true)
 		require.True(t, ok4, "force bypasses the throttle")
-		finish4()
+		release4()
 	})
 }
 

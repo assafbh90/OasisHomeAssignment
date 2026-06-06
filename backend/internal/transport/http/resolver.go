@@ -60,11 +60,11 @@ func NewBearerTokenResolver(tokens tokenAuthenticator) *BearerTokenResolver {
 
 // ResolveIdentity reads the bearer token and authenticates it.
 func (r *BearerTokenResolver) ResolveIdentity(ctx context.Context, req *http.Request) (domain.Identity, error) {
-	h := req.Header.Get(httpconst.HeaderAuthorization)
-	if !strings.HasPrefix(h, httpconst.BearerPrefix) {
+	authHeader := req.Header.Get(httpconst.HeaderAuthorization)
+	if !strings.HasPrefix(authHeader, httpconst.BearerPrefix) {
 		return domain.Identity{}, domain.ErrUnauthenticated
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(h, httpconst.BearerPrefix))
+	token := strings.TrimSpace(strings.TrimPrefix(authHeader, httpconst.BearerPrefix))
 	if token == "" {
 		return domain.Identity{}, domain.ErrUnauthenticated
 	}

@@ -155,14 +155,14 @@ func newEnv(t *testing.T) *env {
 	})
 	jiraClient := jiraclient.NewJiraClient(jira.server.URL, 5*time.Second)
 	tokenManager := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{
-		Repo: credRepo, Provider: jiraProvider, ProviderName: jiraProvider.Name(), Skew: time.Minute,
+		Credentials: credRepo, Provider: jiraProvider, ProviderName: jiraProvider.Name(), RefreshSkew: time.Minute,
 	})
 	connectionSvc := integration.NewConnectionService(integration.Deps{
 		Provider: jiraProvider, State: stateStore, Repo: credRepo, UsePKCE: true,
 	})
 	reportSvc := ticketreport.NewService(ticketreport.Deps{
-		Provider: jiraProvider.Name(), Tokens: tokenManager, Creds: credRepo,
-		Client: jiraClient, Cache: ticketCache, Gate: reconcileGate,
+		ProviderName: jiraProvider.Name(), TokenManager: tokenManager, Credentials: credRepo,
+		ProviderClient: jiraClient, TicketCache: ticketCache, ReconcileGate: reconcileGate,
 	})
 
 	resolver := transport.NewChainIdentityResolver(

@@ -16,10 +16,10 @@ const TokenBytes = 32
 
 // NewToken returns a base64url (unpadded) string of n cryptographically-random
 // bytes.
-func NewToken(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
+func NewToken(numBytes int) (string, error) {
+	randomBytes := make([]byte, numBytes)
+	if _, err := rand.Read(randomBytes); err != nil {
 		return "", fmt.Errorf("generate random token: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return base64.RawURLEncoding.EncodeToString(randomBytes), nil
 }

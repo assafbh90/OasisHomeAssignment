@@ -22,3 +22,10 @@ const (
 // DefaultClientTimeout is the fallback timeout for outbound provider HTTP calls
 // (oauth + connector) when none is configured.
 const DefaultClientTimeout = 10 * time.Second
+
+// IsSuccessStatus reports whether an HTTP status code is 2xx (a successful
+// response). Naming the check keeps every outbound caller reading the same way
+// instead of repeating `code < 200 || code >= 300`.
+func IsSuccessStatus(statusCode int) bool {
+	return statusCode >= 200 && statusCode < 300
+}

@@ -33,6 +33,28 @@ func TestIdentity_BelongsToTenant(t *testing.T) {
 	}
 }
 
+func TestIdentity_IsSamePrincipal(t *testing.T) {
+	t.Parallel()
+	tenant, user := uuid.New(), uuid.New()
+	id := domain.Identity{TenantID: tenant, UserID: user}
+
+	tests := []struct {
+		name             string
+		tenantID, userID uuid.UUID
+		want             bool
+	}{
+		{name: "same tenant and user", tenantID: tenant, userID: user, want: true},
+		{name: "different user", tenantID: tenant, userID: uuid.New(), want: false},
+		{name: "different tenant", tenantID: uuid.New(), userID: user, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, id.IsSamePrincipal(tc.tenantID, tc.userID))
+		})
+	}
+}
+
 func TestIdentity_HasScope(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -65,36 +65,36 @@ func NewRouter(d RouterDeps) *gin.Engine {
 
 // registerAutomationRoutes mounts the automation CRUD endpoints. These are
 // session-driven (UI); unsafe methods are guarded by CSRF + session method.
-func registerAutomationRoutes(v1 *gin.RouterGroup, h *AutomationHandler) {
-	ag := v1.Group("/automations")
+func registerAutomationRoutes(v1 *gin.RouterGroup, handler *AutomationHandler) {
+	automationGroup := v1.Group("/automations")
 	{
-		ag.GET("", h.List)
-		ag.POST("", RequireSessionMethod(), h.Create)
-		ag.GET("/:id", h.Get)
-		ag.PUT("/:id", RequireSessionMethod(), h.Update)
-		ag.DELETE("/:id", RequireSessionMethod(), h.Delete)
-		ag.POST("/:id/run", RequireSessionMethod(), h.RunNow)
+		automationGroup.GET("", handler.List)
+		automationGroup.POST("", RequireSessionMethod(), handler.Create)
+		automationGroup.GET("/:id", handler.Get)
+		automationGroup.PUT("/:id", RequireSessionMethod(), handler.Update)
+		automationGroup.DELETE("/:id", RequireSessionMethod(), handler.Delete)
+		automationGroup.POST("/:id/run", RequireSessionMethod(), handler.RunNow)
 	}
 }
 
 // registerIntegrationRoutes mounts the Jira integration endpoints. The
 // {provider} path segment is validated by middleware; handlers never branch on
 // provider name.
-func registerIntegrationRoutes(v1 *gin.RouterGroup, h *IntegrationHandler) {
-	ig := v1.Group("/integrations")
+func registerIntegrationRoutes(v1 *gin.RouterGroup, handler *IntegrationHandler) {
+	integrationGroup := v1.Group("/integrations")
 	{
-		ig.GET("", h.ListIntegrations)
+		integrationGroup.GET("", handler.ListIntegrations)
 
-		p := ig.Group("/:provider", ValidateProvider())
+		providerGroup := integrationGroup.Group("/:provider", ValidateProvider())
 		{
-			p.GET("/connect", RequireSessionMethod(), h.Connect)
-			p.GET("/callback", RequireSessionMethod(), h.Callback)
-			p.GET("/status", h.Status)
-			p.GET("/projects", h.ListProjects)
-			p.GET("/tickets", h.ListRecentTickets)
-			p.POST("/tickets", RequireScope(domain.ScopeIntegrationsWrite), h.CreateTicket)
-			p.POST("/reconcile", h.Reconcile)
-			p.DELETE("", RequireScope(domain.ScopeIntegrationsWrite), h.Disconnect)
+			providerGroup.GET("/connect", RequireSessionMethod(), handler.Connect)
+			providerGroup.GET("/callback", RequireSessionMethod(), handler.Callback)
+			providerGroup.GET("/status", handler.Status)
+			providerGroup.GET("/projects", handler.ListProjects)
+			providerGroup.GET("/tickets", handler.ListRecentTickets)
+			providerGroup.POST("/tickets", RequireScope(domain.ScopeIntegrationsWrite), handler.CreateTicket)
+			providerGroup.POST("/reconcile", handler.Reconcile)
+			providerGroup.DELETE("", RequireScope(domain.ScopeIntegrationsWrite), handler.Disconnect)
 		}
 	}
 }

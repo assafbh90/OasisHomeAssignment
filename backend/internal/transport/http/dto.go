@@ -22,9 +22,9 @@ const (
 
 // bindJSON decodes the request body into dst, rejecting unknown fields.
 func bindJSON(c *gin.Context, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodyBytes))
-	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	decoder := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodyBytes))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(dst)
 }
 
 // ---- auth ----
@@ -77,9 +77,9 @@ func (r issueTokenRequest) validate() string {
 	if strings.TrimSpace(r.Name) == "" {
 		return "name is required"
 	}
-	for _, s := range r.Scopes {
-		if s != domain.ScopeIntegrationsRead && s != domain.ScopeIntegrationsWrite {
-			return "unknown scope: " + s
+	for _, scope := range r.Scopes {
+		if scope != domain.ScopeIntegrationsRead && scope != domain.ScopeIntegrationsWrite {
+			return "unknown scope: " + scope
 		}
 	}
 	if r.ExpiresAt != nil && r.ExpiresAt.Before(time.Now()) {

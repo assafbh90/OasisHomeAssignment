@@ -33,13 +33,13 @@ func (s *RedisAutomationSeenSet) Unseen(ctx context.Context, automationID uuid.U
 		return nil, fmt.Errorf("read seen set: %w", err)
 	}
 	seen := make(map[string]struct{}, len(members))
-	for _, m := range members {
-		seen[m] = struct{}{}
+	for _, member := range members {
+		seen[member] = struct{}{}
 	}
 	out := make([]string, 0, len(urls))
-	for _, u := range urls {
-		if _, ok := seen[u]; !ok {
-			out = append(out, u)
+	for _, url := range urls {
+		if _, ok := seen[url]; !ok {
+			out = append(out, url)
 		}
 	}
 	return out, nil

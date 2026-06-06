@@ -76,7 +76,7 @@ func TestReactiveTokenManager_ValidToken_NoProviderCall(t *testing.T) {
 	t.Parallel()
 	store := &fakeCredStore{loadCred: validCred()}
 	prov := &fakeProvider{inactivity: inactivity}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	tok, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestReactiveTokenManager_NeedsReauth_NoProviderCall(t *testing.T) {
 	c.Status = domain.StatusNeedsReauth
 	store := &fakeCredStore{loadCred: c}
 	prov := &fakeProvider{inactivity: inactivity}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	_, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
@@ -103,7 +103,7 @@ func TestReactiveTokenManager_LazyDead_ShortCircuits(t *testing.T) {
 	c.RefreshLastUsedAt = time.Now().Add(-100 * 24 * time.Hour) // beyond inactivity window
 	store := &fakeCredStore{loadCred: c}
 	prov := &fakeProvider{inactivity: inactivity}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	_, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
@@ -118,7 +118,7 @@ func TestReactiveTokenManager_Expired_RefreshesAndPersistsRotatedToken(t *testin
 		inactivity: inactivity,
 		ts:         &domain.TokenSet{AccessToken: "new-at", RefreshToken: "new-rt", ExpiresAt: time.Now().Add(time.Hour)},
 	}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	tok, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestReactiveTokenManager_InvalidGrant_MarksNeedsReauth(t *testing.T) {
 	t.Parallel()
 	store := &fakeCredStore{loadCred: expiredCred()}
 	prov := &fakeProvider{inactivity: inactivity, err: domain.ErrInvalidGrant}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	_, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.ErrorIs(t, err, domain.ErrReauthRequired)
@@ -146,7 +146,7 @@ func TestReactiveTokenManager_TransientError_Propagates(t *testing.T) {
 	t.Parallel()
 	store := &fakeCredStore{loadCred: expiredCred()}
 	prov := &fakeProvider{inactivity: inactivity, err: errors.New("503 service unavailable")}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	_, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.Error(t, err)
@@ -158,7 +158,7 @@ func TestReactiveTokenManager_CredentialNotFound(t *testing.T) {
 	t.Parallel()
 	store := &fakeCredStore{loadErr: domain.ErrCredentialNotFound}
 	prov := &fakeProvider{inactivity: inactivity}
-	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Repo: store, Provider: prov, ProviderName: domain.ProviderJira, Skew: time.Minute})
+	m := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{Credentials: store, Provider: prov, ProviderName: domain.ProviderJira, RefreshSkew: time.Minute})
 
 	_, err := m.FetchValidToken(context.Background(), uuid.New(), uuid.New())
 	require.ErrorIs(t, err, domain.ErrCredentialNotFound)

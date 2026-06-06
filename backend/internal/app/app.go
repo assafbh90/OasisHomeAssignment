@@ -54,15 +54,15 @@ const (
 
 // App holds the fully-wired dependencies shared by the server and subcommands.
 type App struct {
-	cfg      config.Config
-	log      *slog.Logger
-	deps     transport.RouterDeps
-	tenants  *store.PostgresTenantRepository
-	users    *store.PostgresUserRepository
-	hasher   *auth.Argon2PasswordHasher
-	autoSvc  *automation.Service
-	autoRepo *store.PostgresAutomationRepository
-	closers  []func()
+	cfg               config.Config
+	log               *slog.Logger
+	deps              transport.RouterDeps
+	tenants           *store.PostgresTenantRepository
+	users             *store.PostgresUserRepository
+	hasher            *auth.Argon2PasswordHasher
+	automationService *automation.Service
+	automationRepo    *store.PostgresAutomationRepository
+	closers           []func()
 }
 
 // Run is the process entrypoint: load config, build the logger, wire everything,
@@ -78,7 +78,7 @@ func Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	a, err := Wire(ctx, cfg, log)
+	a, err := Build(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -95,11 +95,11 @@ func Run() error {
 	return a.Serve(ctx)
 }
 
-// Wire builds and connects all adapters and services. It is the only place
-// concretes are bound to interfaces. The body is a table of contents — each step
-// builds one layer and hands its outputs to the next: infra → repos → redis →
-// auth → Jira → automation → transport.
-func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
+// Build constructs the fully-wired App: it is the only place concretes are bound
+// to interfaces. The body is a table of contents — each step builds one layer and
+// hands its outputs to the next: infra → repos → redis → auth → Jira → automation
+// → transport.
+func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
 	a := &App{cfg: cfg, log: log}
 
 	pool, redisClient, cipher, err := a.initInfra(ctx)
@@ -154,15 +154,15 @@ func (a *App) buildJiraIntegration(repos repos, redisStores redisAdapters) jiraS
 	})
 	jiraClient := client.NewJiraClient(a.cfg.Jira.APIBaseURL, a.cfg.Jira.HTTPTimeout)
 	tokenManager := oauthtoken.NewReactiveTokenManager(oauthtoken.Deps{
-		Repo: repos.creds, Provider: provider, ProviderName: provider.Name(), Skew: a.cfg.Jira.AccessTokenSkew,
+		Credentials: repos.credentials, Provider: provider, ProviderName: provider.Name(), RefreshSkew: a.cfg.Jira.AccessTokenSkew,
 	})
 	return jiraServices{
 		connection: integration.NewConnectionService(integration.Deps{
-			Provider: provider, State: redisStores.state, Repo: repos.creds, UsePKCE: a.cfg.Jira.UsePKCE,
+			Provider: provider, State: redisStores.state, Repo: repos.credentials, UsePKCE: a.cfg.Jira.UsePKCE,
 		}),
 		reports: ticketreport.NewService(ticketreport.Deps{
-			Provider: provider.Name(), Tokens: tokenManager, Creds: repos.creds,
-			Client: jiraClient, Cache: redisStores.tickets, Gate: redisStores.reconcile,
+			ProviderName: provider.Name(), TokenManager: tokenManager, Credentials: repos.credentials,
+			ProviderClient: jiraClient, TicketCache: redisStores.tickets, ReconcileGate: redisStores.reconcile,
 		}),
 	}
 }
@@ -170,9 +170,9 @@ func (a *App) buildJiraIntegration(repos repos, redisStores redisAdapters) jiraS
 // buildAutomation wires the blog-digest subsystem: its store, Redis seen-set, and
 // the run pipeline (discover → scrape → summarize), reusing ticket reporting to file.
 func (a *App) buildAutomation(pool *pgxpool.Pool, redisClient *redis.Client, reports *ticketreport.Service) {
-	a.autoRepo = store.NewPostgresAutomationRepository(pool)
-	a.autoSvc = automation.NewService(automation.Deps{
-		Repo:            a.autoRepo,
+	a.automationRepo = store.NewPostgresAutomationRepository(pool)
+	a.automationService = automation.NewService(automation.Deps{
+		Repo:            a.automationRepo,
 		Discoverer:      discover.New(a.cfg.Automation.HTTPTimeout),
 		Scraper:         scrape.New(a.cfg.Automation.HTTPTimeout),
 		Summarizer:      summarize.New(a.cfg.Ollama.BaseURL, a.cfg.Ollama.Model, a.cfg.Ollama.Timeout, a.cfg.Ollama.MaxInputChars),
@@ -204,7 +204,7 @@ func (a *App) buildRouterDeps(pool *pgxpool.Pool, redisClient *redis.Client, red
 		Tokens:      transport.NewTokenHandler(authn.tokens),
 		Health:      transport.NewHealthHandler(pool, platform.RedisPinger{Client: redisClient}),
 		Integration: transport.NewIntegrationHandler(jira.connection, jira.reports, "/"),
-		Automation:  transport.NewAutomationHandler(a.autoSvc),
+		Automation:  transport.NewAutomationHandler(a.automationService),
 	}
 }
 
@@ -234,20 +234,20 @@ func (a *App) initInfra(ctx context.Context) (*pgxpool.Pool, *redis.Client, *oau
 	return pool, redisClient, cipher, nil
 }
 
-// repos groups the Postgres repositories so Wire passes one value, not several.
+// repos groups the Postgres repositories so Build passes one value, not several.
 type repos struct {
-	tenants *store.PostgresTenantRepository
-	users   *store.PostgresUserRepository
-	tokens  *store.PostgresApiTokenRepository
-	creds   *store.PostgresCredentialRepository
+	tenants     *store.PostgresTenantRepository
+	users       *store.PostgresUserRepository
+	tokens      *store.PostgresApiTokenRepository
+	credentials *store.PostgresCredentialRepository
 }
 
 func newRepos(pool *pgxpool.Pool, cipher store.TokenCipher) repos {
 	return repos{
-		tenants: store.NewPostgresTenantRepository(pool),
-		users:   store.NewPostgresUserRepository(pool),
-		tokens:  store.NewPostgresApiTokenRepository(pool),
-		creds:   store.NewPostgresCredentialRepository(pool, cipher),
+		tenants:     store.NewPostgresTenantRepository(pool),
+		users:       store.NewPostgresUserRepository(pool),
+		tokens:      store.NewPostgresApiTokenRepository(pool),
+		credentials: store.NewPostgresCredentialRepository(pool, cipher),
 	}
 }
 

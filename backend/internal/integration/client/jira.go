@@ -110,8 +110,8 @@ func (c *JiraClient) ListProjects(ctx context.Context, auth domain.ClientAuth) (
 		return nil, err
 	}
 	projects := make([]domain.ProjectRef, 0, len(out.Values))
-	for _, v := range out.Values {
-		projects = append(projects, domain.ProjectRef{Key: v.Key, Name: v.Name})
+	for _, project := range out.Values {
+		projects = append(projects, domain.ProjectRef{Key: project.Key, Name: project.Name})
 	}
 	return projects, nil
 }
@@ -131,6 +131,12 @@ type searchResponse struct {
 	IsLast        bool   `json:"isLast"`
 }
 
+// isFinalPage reports whether pagination should stop: Jira flagged the last page,
+// gave no continuation token, or returned no issues.
+func (r searchResponse) isFinalPage() bool {
+	return r.IsLast || r.NextPageToken == "" || len(r.Issues) == 0
+}
+
 // SearchByLabel returns the IdentityHub-labelled issues on the connected site,
 // newest first, paginated and bounded to maxTickets. This is the drift-
 // reconciliation primitive: it finds every IdentityHub ticket regardless of who
@@ -142,28 +148,28 @@ func (c *JiraClient) SearchByLabel(ctx context.Context, auth domain.ClientAuth) 
 		pageToken string
 	)
 	for len(tickets) < maxTickets {
-		q := url.Values{}
-		q.Set("jql", jql)
-		q.Set("maxResults", strconv.Itoa(searchPageSize))
-		q.Set("fields", "summary,created,project")
+		query := url.Values{}
+		query.Set("jql", jql)
+		query.Set("maxResults", strconv.Itoa(searchPageSize))
+		query.Set("fields", "summary,created,project")
 		if pageToken != "" {
-			q.Set("nextPageToken", pageToken)
+			query.Set("nextPageToken", pageToken)
 		}
 
 		var page searchResponse
-		if err := c.doJSON(ctx, http.MethodGet, auth, pathSearch+"?"+q.Encode(), nil, &page); err != nil {
+		if err := c.doJSON(ctx, http.MethodGet, auth, pathSearch+"?"+query.Encode(), nil, &page); err != nil {
 			return nil, err
 		}
-		for _, iss := range page.Issues {
+		for _, issue := range page.Issues {
 			tickets = append(tickets, domain.ProviderTicket{
-				IssueKey:   iss.Key,
-				Title:      iss.Fields.Summary,
-				ProjectKey: iss.Fields.Project.Key,
-				URL:        issueURL(auth.SiteURL, iss.Key),
-				CreatedAt:  parseJiraTime(iss.Fields.Created),
+				IssueKey:   issue.Key,
+				Title:      issue.Fields.Summary,
+				ProjectKey: issue.Fields.Project.Key,
+				URL:        issueURL(auth.SiteURL, issue.Key),
+				CreatedAt:  parseJiraTime(issue.Fields.Created),
 			})
 		}
-		if page.IsLast || page.NextPageToken == "" || len(page.Issues) == 0 {
+		if page.isFinalPage() {
 			break
 		}
 		pageToken = page.NextPageToken
@@ -173,8 +179,8 @@ func (c *JiraClient) SearchByLabel(ctx context.Context, auth domain.ClientAuth) 
 
 // withIdentityHubLabel appends the IdentityHub label if not already present.
 func withIdentityHubLabel(labels []string) []string {
-	for _, l := range labels {
-		if l == domain.IdentityHubLabel {
+	for _, label := range labels {
+		if label == domain.IdentityHubLabel {
 			return labels
 		}
 	}
@@ -225,7 +231,7 @@ func (c *JiraClient) doJSON(ctx context.Context, method string, auth domain.Clie
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !httpconst.IsSuccessStatus(resp.StatusCode) {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errSnippetLimit))
 		return fmt.Errorf(errFmtAPIStatus, method, path, resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
@@ -316,9 +322,9 @@ func adfInline(s string) []any {
 // sanitizeLabels drops empties and replaces spaces (Jira labels can't contain
 // whitespace).
 func sanitizeLabels(in []string) []string {
-	return lo.FilterMap(in, func(l string, _ int) (string, bool) {
-		l = strings.TrimSpace(l)
-		return strings.ReplaceAll(l, " ", "-"), l != ""
+	return lo.FilterMap(in, func(label string, _ int) (string, bool) {
+		label = strings.TrimSpace(label)
+		return strings.ReplaceAll(label, " ", "-"), label != ""
 	})
 }
 

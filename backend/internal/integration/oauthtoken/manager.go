@@ -28,49 +28,54 @@ type RefreshProvider interface {
 // ReactiveTokenManager returns valid provider access tokens, refreshing lazily
 // (only at use time) and never via a background warmer.
 type ReactiveTokenManager struct {
-	repo     CredentialStore
-	provider RefreshProvider
-	name     string
-	skew     time.Duration
+	credentials  CredentialStore
+	provider     RefreshProvider
+	providerName string
+	refreshSkew  time.Duration // refresh this long before actual expiry
 }
 
-// Deps are the collaborators of a ReactiveTokenManager. Skew triggers refresh
-// slightly before actual expiry.
+// Deps are the collaborators of a ReactiveTokenManager. RefreshSkew triggers a
+// refresh slightly before actual expiry.
 type Deps struct {
-	Repo         CredentialStore
+	Credentials  CredentialStore
 	Provider     RefreshProvider
 	ProviderName string
-	Skew         time.Duration
+	RefreshSkew  time.Duration
 }
 
 // NewReactiveTokenManager constructs the manager from its dependencies.
 func NewReactiveTokenManager(d Deps) *ReactiveTokenManager {
-	return &ReactiveTokenManager{repo: d.Repo, provider: d.Provider, name: d.ProviderName, skew: d.Skew}
+	return &ReactiveTokenManager{
+		credentials:  d.Credentials,
+		provider:     d.Provider,
+		providerName: d.ProviderName,
+		refreshSkew:  d.RefreshSkew,
+	}
 }
 
 // FetchValidToken returns a usable access token, refreshing it on demand. It
 // returns ErrReauthRequired when the connection must be reconnected,
 // ErrCredentialNotFound when absent, or a wrapped error for transient failures.
 func (m *ReactiveTokenManager) FetchValidToken(ctx context.Context, tenantID, userID uuid.UUID) (string, error) {
-	cred, err := m.repo.LoadCredential(ctx, tenantID, userID, m.name)
+	credential, err := m.credentials.LoadCredential(ctx, tenantID, userID, m.providerName)
 	if err != nil {
 		return "", err
 	}
-	if cred.NeedsReauth() {
+	if credential.NeedsReauth() {
 		return "", domain.ErrReauthRequired
 	}
 	now := time.Now()
 	// Fast path: a still-valid access token never triggers a provider call.
-	if !cred.IsAccessTokenExpired(now, m.skew) {
-		return cred.AccessToken, nil
+	if !credential.IsAccessTokenExpired(now, m.refreshSkew) {
+		return credential.AccessToken, nil
 	}
 	// Lazy-dead: a refresh token that can't possibly work skips the API entirely.
-	if cred.HasRefreshTokenLikelyExpired(now, m.provider.InactivityWindow()) {
+	if credential.HasRefreshTokenLikelyExpired(now, m.provider.InactivityWindow()) {
 		m.markReauth(ctx, tenantID, userID)
 		return "", domain.ErrReauthRequired
 	}
 
-	ts, err := m.provider.RefreshTokens(ctx, cred.RefreshToken)
+	tokenSet, err := m.provider.RefreshTokens(ctx, credential.RefreshToken)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidGrant) {
 			m.markReauth(ctx, tenantID, userID)
@@ -79,24 +84,24 @@ func (m *ReactiveTokenManager) FetchValidToken(ctx context.Context, tenantID, us
 		return "", fmt.Errorf("refresh tokens: %w", err)
 	}
 
-	cred.AccessToken = ts.AccessToken
-	cred.AccessExpiresAt = ts.ExpiresAt
-	if ts.RefreshToken != "" {
-		cred.RefreshToken = ts.RefreshToken // persist the rotated refresh token
+	credential.AccessToken = tokenSet.AccessToken
+	credential.AccessExpiresAt = tokenSet.ExpiresAt
+	if tokenSet.RefreshToken != "" {
+		credential.RefreshToken = tokenSet.RefreshToken // persist the rotated refresh token
 	}
-	if len(ts.Scopes) > 0 {
-		cred.Scopes = ts.Scopes
+	if len(tokenSet.Scopes) > 0 {
+		credential.Scopes = tokenSet.Scopes
 	}
-	cred.RefreshLastUsedAt = now
-	cred.Status = domain.StatusConnected
-	if err := m.repo.UpdateTokens(ctx, cred); err != nil {
+	credential.RefreshLastUsedAt = now
+	credential.Status = domain.StatusConnected
+	if err := m.credentials.UpdateTokens(ctx, credential); err != nil {
 		return "", fmt.Errorf("persist refreshed tokens: %w", err)
 	}
-	return cred.AccessToken, nil
+	return credential.AccessToken, nil
 }
 
 func (m *ReactiveTokenManager) markReauth(ctx context.Context, tenantID, userID uuid.UUID) {
-	if err := m.repo.MarkNeedsReauth(ctx, tenantID, userID, m.name); err != nil {
+	if err := m.credentials.MarkNeedsReauth(ctx, tenantID, userID, m.providerName); err != nil {
 		logging.FromContext(ctx).Warn("mark needs_reauth failed", logging.Err(err))
 	}
 }

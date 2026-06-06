@@ -145,11 +145,18 @@ func (p *JiraOAuthProvider) clientCtx(ctx context.Context) context.Context {
 // ErrorCode is populated by x/oauth2 only for JSON error bodies, so we also parse
 // the raw body as a fallback for providers that omit the content-type header.
 func mapTokenError(err error) error {
-	var re *oauth2.RetrieveError
-	if errors.As(err, &re) && (re.ErrorCode == errCodeInvalidGrant || bodyHasInvalidGrant(re.Body)) {
+	if isInvalidGrantError(err) {
 		return domain.ErrInvalidGrant
 	}
 	return fmt.Errorf("token request: %w", err)
+}
+
+// isInvalidGrantError reports whether err is the provider rejecting the grant
+// (the refresh token / auth code is no longer valid), which must drive the
+// connection to needs_reauth rather than be treated as a transient failure.
+func isInvalidGrantError(err error) bool {
+	var re *oauth2.RetrieveError
+	return errors.As(err, &re) && (re.ErrorCode == errCodeInvalidGrant || bodyHasInvalidGrant(re.Body))
 }
 
 func bodyHasInvalidGrant(body []byte) bool {
@@ -192,7 +199,7 @@ func (p *JiraOAuthProvider) resolveAccount(ctx context.Context, accessToken stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !httpconst.IsSuccessStatus(resp.StatusCode) {
 		return domain.ProviderAccount{}, fmt.Errorf(errFmtResourcesStatus, resp.StatusCode)
 	}
 	var resources []accessibleResource
@@ -202,6 +209,6 @@ func (p *JiraOAuthProvider) resolveAccount(ctx context.Context, accessToken stri
 	if len(resources) == 0 {
 		return domain.ProviderAccount{}, errNoAccessibleSites
 	}
-	r := resources[0]
-	return domain.ProviderAccount{ID: r.ID, SiteURL: r.URL, Name: r.Name}, nil
+	resource := resources[0]
+	return domain.ProviderAccount{ID: resource.ID, SiteURL: resource.URL, Name: resource.Name}, nil
 }

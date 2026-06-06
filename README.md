@@ -287,7 +287,7 @@ user, and pre-existing ones on a fresh start.
   refresh (button)  ─► POST …/reconcile (force) ─┐
   connect (async)   ─► reconcileAsync ───────────┤
                                                  ▼
-                                    RedisReconcileGate.Begin
+                                    RedisReconcileGate.TryAcquire
                               ┌──────────────────┴───────────────────┐
                               │ throttle: skip if reconciled < 30m ago│  (unless forced)
                               │ single-flight: SET NX lock per tenant │  (collapses a
@@ -362,7 +362,7 @@ endpoints (see [REST API](#rest-api-for-scanners--ci)).
 ├── backend/
 │   ├── cmd/api/main.go                 # thin shell → app.Run() (dispatches: serve | seed | scheduler)
 │   ├── internal/
-│   │   ├── app/                        # composition root: Wire() binds adapters→ports; Serve/Seed/RunScheduler
+│   │   ├── app/                        # composition root: Build() binds adapters→ports; Serve/Seed/RunScheduler
 │   │   ├── domain/                     # Identity, value objects, sentinel errors, scopes, Automation (pure)
 │   │   ├── auth/                       # Argon2id hasher (alexedwards/argon2id) + UserAuthenticator
 │   │   ├── session/                    # opaque server-side session manager (Redis-backed)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/samber/lo"
 
 	"github.com/assafbh/identityhub/internal/domain"
 	"github.com/assafbh/identityhub/internal/session"
@@ -92,10 +93,7 @@ func (s *RedisSessionStore) DeleteAllForUser(ctx context.Context, userID uuid.UU
 	if err != nil {
 		return fmt.Errorf("list user sessions: %w", err)
 	}
-	keys := make([]string, 0, len(ids)+1)
-	for _, id := range ids {
-		keys = append(keys, sessionKey(id))
-	}
+	keys := lo.Map(ids, func(id string, _ int) string { return sessionKey(id) })
 	keys = append(keys, userSessionsKey(userID))
 	if err := s.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("delete user sessions: %w", err)

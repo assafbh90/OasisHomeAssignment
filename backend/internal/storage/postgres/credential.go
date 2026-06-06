@@ -30,13 +30,13 @@ const credentialCols = `id, tenant_id, user_id, provider, access_token, refresh_
 
 func (r *PostgresCredentialRepository) scanCredential(row pgx.Row) (*domain.Credential, error) {
 	var (
-		c                     domain.Credential
+		credential            domain.Credential
 		accessEnc, refreshEnc []byte
 		externalID, siteURL   *string
 	)
-	if err := row.Scan(&c.ID, &c.TenantID, &c.UserID, &c.Provider, &accessEnc, &refreshEnc,
-		&c.Scopes, &externalID, &siteURL, &c.AccessExpiresAt, &c.RefreshLastUsedAt, &c.Status,
-		&c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := row.Scan(&credential.ID, &credential.TenantID, &credential.UserID, &credential.Provider, &accessEnc, &refreshEnc,
+		&credential.Scopes, &externalID, &siteURL, &credential.AccessExpiresAt, &credential.RefreshLastUsedAt, &credential.Status,
+		&credential.CreatedAt, &credential.UpdatedAt); err != nil {
 		return nil, err
 	}
 	access, err := r.cipher.DecryptToken(accessEnc)
@@ -47,28 +47,28 @@ func (r *PostgresCredentialRepository) scanCredential(row pgx.Row) (*domain.Cred
 	if err != nil {
 		return nil, fmt.Errorf("decrypt refresh token: %w", err)
 	}
-	c.AccessToken = access
-	c.RefreshToken = refresh
+	credential.AccessToken = access
+	credential.RefreshToken = refresh
 	if externalID != nil {
-		c.ExternalAccountID = *externalID
+		credential.ExternalAccountID = *externalID
 	}
 	if siteURL != nil {
-		c.SiteURL = *siteURL
+		credential.SiteURL = *siteURL
 	}
-	return &c, nil
+	return &credential, nil
 }
 
 // SaveCredential upserts a credential (a reconnect replaces the prior one).
-func (r *PostgresCredentialRepository) SaveCredential(ctx context.Context, c *domain.Credential) error {
-	accessEnc, err := r.cipher.EncryptToken(c.AccessToken)
+func (r *PostgresCredentialRepository) SaveCredential(ctx context.Context, credential *domain.Credential) error {
+	accessEnc, err := r.cipher.EncryptToken(credential.AccessToken)
 	if err != nil {
 		return fmt.Errorf("encrypt access token: %w", err)
 	}
-	refreshEnc, err := r.cipher.EncryptToken(c.RefreshToken)
+	refreshEnc, err := r.cipher.EncryptToken(credential.RefreshToken)
 	if err != nil {
 		return fmt.Errorf("encrypt refresh token: %w", err)
 	}
-	return r.inTenantTx(ctx, c.TenantID, func(tx pgx.Tx) error {
+	return r.inTenantTx(ctx, credential.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`INSERT INTO integration_credentials
 			   (tenant_id, user_id, provider, access_token, refresh_token, scopes,
@@ -85,22 +85,22 @@ func (r *PostgresCredentialRepository) SaveCredential(ctx context.Context, c *do
 			   status = EXCLUDED.status,
 			   updated_at = now()
 			 RETURNING id, created_at, updated_at`,
-			c.TenantID, c.UserID, c.Provider, accessEnc, refreshEnc, c.Scopes,
-			nullString(c.ExternalAccountID), nullString(c.SiteURL), c.AccessExpiresAt, c.RefreshLastUsedAt, c.Status,
-		).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
+			credential.TenantID, credential.UserID, credential.Provider, accessEnc, refreshEnc, credential.Scopes,
+			nullString(credential.ExternalAccountID), nullString(credential.SiteURL), credential.AccessExpiresAt, credential.RefreshLastUsedAt, credential.Status,
+		).Scan(&credential.ID, &credential.CreatedAt, &credential.UpdatedAt)
 	})
 }
 
 // LoadCredential returns the tenant user's credential for a provider.
 func (r *PostgresCredentialRepository) LoadCredential(ctx context.Context, tenantID, userID uuid.UUID, provider string) (*domain.Credential, error) {
-	var c *domain.Credential
+	var credential *domain.Credential
 	err := r.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
 			`SELECT `+credentialCols+` FROM integration_credentials
 			 WHERE tenant_id = $1 AND user_id = $2 AND provider = $3`,
 			tenantID, userID, provider)
 		var err error
-		c, err = r.scanCredential(row)
+		credential, err = r.scanCredential(row)
 		return err
 	})
 	if err != nil {
@@ -109,23 +109,23 @@ func (r *PostgresCredentialRepository) LoadCredential(ctx context.Context, tenan
 		}
 		return nil, fmt.Errorf("load credential: %w", err)
 	}
-	return c, nil
+	return credential, nil
 }
 
 // UpdateTokens persists rotated tokens + new expiry + refresh_last_used_at in a
 // single statement.
-func (r *PostgresCredentialRepository) UpdateTokens(ctx context.Context, c *domain.Credential) error {
-	return r.inTenantTx(ctx, c.TenantID, func(tx pgx.Tx) error {
-		return r.updateTokensTx(ctx, tx, c)
+func (r *PostgresCredentialRepository) UpdateTokens(ctx context.Context, credential *domain.Credential) error {
+	return r.inTenantTx(ctx, credential.TenantID, func(tx pgx.Tx) error {
+		return r.updateTokensTx(ctx, tx, credential)
 	})
 }
 
-func (r *PostgresCredentialRepository) updateTokensTx(ctx context.Context, tx pgx.Tx, c *domain.Credential) error {
-	accessEnc, err := r.cipher.EncryptToken(c.AccessToken)
+func (r *PostgresCredentialRepository) updateTokensTx(ctx context.Context, tx pgx.Tx, credential *domain.Credential) error {
+	accessEnc, err := r.cipher.EncryptToken(credential.AccessToken)
 	if err != nil {
 		return fmt.Errorf("encrypt access token: %w", err)
 	}
-	refreshEnc, err := r.cipher.EncryptToken(c.RefreshToken)
+	refreshEnc, err := r.cipher.EncryptToken(credential.RefreshToken)
 	if err != nil {
 		return fmt.Errorf("encrypt refresh token: %w", err)
 	}
@@ -134,8 +134,8 @@ func (r *PostgresCredentialRepository) updateTokensTx(ctx context.Context, tx pg
 		   access_token = $4, refresh_token = $5, access_expires_at = $6,
 		   refresh_last_used_at = $7, scopes = $8, status = $9, updated_at = now()
 		 WHERE tenant_id = $1 AND user_id = $2 AND provider = $3`,
-		c.TenantID, c.UserID, c.Provider, accessEnc, refreshEnc,
-		c.AccessExpiresAt, c.RefreshLastUsedAt, c.Scopes, c.Status)
+		credential.TenantID, credential.UserID, credential.Provider, accessEnc, refreshEnc,
+		credential.AccessExpiresAt, credential.RefreshLastUsedAt, credential.Scopes, credential.Status)
 	return err
 }
 

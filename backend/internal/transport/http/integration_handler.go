@@ -40,8 +40,8 @@ type reportService interface {
 // IntegrationHandler serves the Jira integration endpoints. It never branches on
 // provider name; the {provider} segment is validated by ValidateProvider.
 type IntegrationHandler struct {
-	conn    connectionService
-	reports reportService
+	connections connectionService
+	reports     reportService
 
 	// frontendPostConnectPath is where the OAuth callback redirects the browser
 	// after completing (or failing) the connection.
@@ -49,11 +49,11 @@ type IntegrationHandler struct {
 }
 
 // NewIntegrationHandler constructs the handler.
-func NewIntegrationHandler(conn connectionService, reports reportService, postConnectPath string) *IntegrationHandler {
+func NewIntegrationHandler(connections connectionService, reports reportService, postConnectPath string) *IntegrationHandler {
 	if postConnectPath == "" {
 		postConnectPath = "/"
 	}
-	return &IntegrationHandler{conn: conn, reports: reports, frontendPostConnectPath: postConnectPath}
+	return &IntegrationHandler{connections: connections, reports: reports, frontendPostConnectPath: postConnectPath}
 }
 
 // ValidateProvider rejects unknown providers with 404. Only Jira is supported.
@@ -79,7 +79,7 @@ func ValidateProvider() gin.HandlerFunc {
 // @Router   /v1/integrations [get]
 func (h *IntegrationHandler) ListIntegrations(c *gin.Context) {
 	id, _ := mustIdentity(c)
-	info, err := h.conn.DescribeConnection(c.Request.Context(), id)
+	info, err := h.connections.DescribeConnection(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -91,7 +91,7 @@ func (h *IntegrationHandler) ListIntegrations(c *gin.Context) {
 // Browser/session flow — not part of the public API docs.
 func (h *IntegrationHandler) Connect(c *gin.Context) {
 	id, _ := mustIdentity(c)
-	url, err := h.conn.StartAuthorization(c.Request.Context(), id)
+	url, err := h.connections.StartAuthorization(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -109,7 +109,7 @@ func (h *IntegrationHandler) Callback(c *gin.Context) {
 		c.Redirect(http.StatusFound, h.redirectURL("connect_error", "missing_params"))
 		return
 	}
-	if err := h.conn.CompleteAuthorization(c.Request.Context(), id, state, code); err != nil {
+	if err := h.connections.CompleteAuthorization(c.Request.Context(), id, state, code); err != nil {
 		c.Redirect(http.StatusFound, h.redirectURL("connect_error", "1"))
 		return
 	}
@@ -164,7 +164,7 @@ func (h *IntegrationHandler) reconcileAsync(reqCtx context.Context, id domain.Id
 // @Router   /v1/integrations/{provider}/status [get]
 func (h *IntegrationHandler) Status(c *gin.Context) {
 	id, _ := mustIdentity(c)
-	info, err := h.conn.DescribeConnection(c.Request.Context(), id)
+	info, err := h.connections.DescribeConnection(c.Request.Context(), id)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -184,7 +184,7 @@ func (h *IntegrationHandler) Status(c *gin.Context) {
 // @Router   /v1/integrations/{provider} [delete]
 func (h *IntegrationHandler) Disconnect(c *gin.Context) {
 	id, _ := mustIdentity(c)
-	if err := h.conn.DisconnectIntegration(c.Request.Context(), id); err != nil {
+	if err := h.connections.DisconnectIntegration(c.Request.Context(), id); err != nil {
 		respondError(c, err)
 		return
 	}

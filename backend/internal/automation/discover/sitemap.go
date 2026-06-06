@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/samber/lo"
+
+	"github.com/assafbh/identityhub/internal/httpconst"
 )
 
 const (
@@ -71,19 +73,19 @@ func (s *Sitemap) Discover(ctx context.Context, siteURL string) ([]string, error
 			if err != nil {
 				continue // skip an unreachable child sitemap
 			}
-			for _, u := range child.URLs {
-				entries = append(entries, entry{loc: u.Loc, lastmod: u.LastMod})
+			for _, urlNode := range child.URLs {
+				entries = append(entries, entry{loc: urlNode.Loc, lastmod: urlNode.LastMod})
 			}
 		}
 	} else {
-		for _, u := range doc.URLs {
-			entries = append(entries, entry{loc: u.Loc, lastmod: u.LastMod})
+		for _, urlNode := range doc.URLs {
+			entries = append(entries, entry{loc: urlNode.Loc, lastmod: urlNode.LastMod})
 		}
 	}
 
 	// Keep only URLs strictly under the watched prefix.
-	posts := lo.Filter(entries, func(e entry, _ int) bool {
-		loc := strings.TrimSpace(e.loc)
+	posts := lo.Filter(entries, func(candidate entry, _ int) bool {
+		loc := strings.TrimSpace(candidate.loc)
 		return strings.HasPrefix(loc, prefix) && len(loc) > len(prefix)
 	})
 	if len(posts) == 0 {
@@ -91,14 +93,14 @@ func (s *Sitemap) Discover(ctx context.Context, siteURL string) ([]string, error
 	}
 
 	// Newest lastmod first; entries without a lastmod sort last (stable).
-	slices.SortStableFunc(posts, func(a, b entry) int {
-		return strings.Compare(b.lastmod, a.lastmod)
+	slices.SortStableFunc(posts, func(left, right entry) int {
+		return strings.Compare(right.lastmod, left.lastmod)
 	})
-	return lo.Map(posts, func(e entry, _ int) string { return strings.TrimSpace(e.loc) }), nil
+	return lo.Map(posts, func(candidate entry, _ int) string { return strings.TrimSpace(candidate.loc) }), nil
 }
 
-func (s *Sitemap) fetch(ctx context.Context, u string) (*sitemapDoc, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+func (s *Sitemap) fetch(ctx context.Context, sitemapURL string) (*sitemapDoc, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sitemapURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +109,7 @@ func (s *Sitemap) fetch(ctx context.Context, u string) (*sitemapDoc, error) {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !httpconst.IsSuccessStatus(resp.StatusCode) {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSitemapBytes))

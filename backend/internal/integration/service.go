@@ -86,7 +86,7 @@ func (s *ConnectionService) CompleteAuthorization(ctx context.Context, principal
 	if err != nil {
 		return err // ErrStateNotFound
 	}
-	if tenantID != principal.TenantID || userID != principal.UserID {
+	if !principal.IsSamePrincipal(tenantID, userID) {
 		return domain.ErrTenantMismatch
 	}
 

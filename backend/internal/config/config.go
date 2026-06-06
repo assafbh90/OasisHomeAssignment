@@ -286,9 +286,9 @@ func getStringSlice(v *viper.Viper, key string) []string {
 		return splitCSV(val)
 	case []any:
 		out := make([]string, 0, len(val))
-		for _, e := range val {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
+		for _, item := range val {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
 			}
 		}
 		return out
@@ -300,9 +300,9 @@ func getStringSlice(v *viper.Viper, key string) []string {
 func splitCSV(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			out = append(out, t)
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
 		}
 	}
 	return out
@@ -394,19 +394,19 @@ func setDefaults(v *viper.Viper) {
 // Validate enforces required fields and structural invariants.
 func (c *Config) Validate() error {
 	var errs []string
-	req := func(cond bool, msg string) {
-		if !cond {
-			errs = append(errs, msg)
+	requireField := func(condition bool, message string) {
+		if !condition {
+			errs = append(errs, message)
 		}
 	}
 
-	req(c.HTTP.Addr != "", "http.addr is required")
-	req(c.Postgres.Host != "" && c.Postgres.User != "" && c.Postgres.DB != "",
+	requireField(c.HTTP.Addr != "", "http.addr is required")
+	requireField(c.Postgres.Host != "" && c.Postgres.User != "" && c.Postgres.DB != "",
 		"postgres host/user/db are required")
-	req(c.Redis.Addr != "", "redis.addr is required")
+	requireField(c.Redis.Addr != "", "redis.addr is required")
 
-	req(c.Session.TTL > 0, "session.ttl must be > 0")
-	req(c.Session.AbsoluteTTL >= c.Session.TTL, "session.absolute_ttl must be >= session.ttl")
+	requireField(c.Session.TTL > 0, "session.ttl must be > 0")
+	requireField(c.Session.AbsoluteTTL >= c.Session.TTL, "session.absolute_ttl must be >= session.ttl")
 
 	if key, err := c.Crypto.DecodedTokenKey(); err != nil {
 		errs = append(errs, "crypto.token_key must be base64-encoded")
@@ -414,20 +414,20 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("crypto.token_key must decode to %d bytes, got %d", aesKeyBytes, len(key)))
 	}
 
-	req(c.Argon2.Memory >= minArgon2MemoryKiB, "argon2.memory too low (>= 8 MiB)")
-	req(c.Argon2.Iterations >= 1, "argon2.iterations must be >= 1")
-	req(c.Argon2.Parallelism >= 1, "argon2.parallelism must be >= 1")
-	req(c.Argon2.KeyLength >= minArgon2KeyLength, "argon2.key_length must be >= 16")
+	requireField(c.Argon2.Memory >= minArgon2MemoryKiB, "argon2.memory too low (>= 8 MiB)")
+	requireField(c.Argon2.Iterations >= 1, "argon2.iterations must be >= 1")
+	requireField(c.Argon2.Parallelism >= 1, "argon2.parallelism must be >= 1")
+	requireField(c.Argon2.KeyLength >= minArgon2KeyLength, "argon2.key_length must be >= 16")
 
-	req(c.APIToken.Prefix != "", "api_token.prefix is required")
+	requireField(c.APIToken.Prefix != "", "api_token.prefix is required")
 
 	// Jira endpoint config has defaults, so we require it structurally. The
 	// client_id/secret are NOT fatal when missing — the stack still boots so auth
 	// and the UI are usable; main logs a warning and the integration endpoints
 	// return a clear error until configured (see Config.JiraConfigured).
-	req(c.Jira.RedirectURI != "", "jira.redirect_uri is required")
-	req(len(c.Jira.Scopes) > 0, "jira.scopes must not be empty")
-	req(c.Jira.AuthURL != "" && c.Jira.TokenURL != "" && c.Jira.APIBaseURL != "",
+	requireField(c.Jira.RedirectURI != "", "jira.redirect_uri is required")
+	requireField(len(c.Jira.Scopes) > 0, "jira.scopes must not be empty")
+	requireField(c.Jira.AuthURL != "" && c.Jira.TokenURL != "" && c.Jira.APIBaseURL != "",
 		"jira auth_url/token_url/api_base_url are required")
 
 	if len(errs) > 0 {
