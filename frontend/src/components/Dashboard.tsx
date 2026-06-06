@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { type Connection, type Project } from "../types";
+import { AutomationPanel } from "./AutomationPanel";
 import { TicketsPanel } from "./TicketsPanel";
 import { TokensPanel } from "./TokensPanel";
 
@@ -9,6 +10,7 @@ export function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<"findings" | "automation">("findings");
 
   const loadStatus = useCallback(async () => {
     const c = await api.get<Connection>("/v1/integrations/jira/status");
@@ -51,6 +53,15 @@ export function Dashboard() {
     <div className="grid">
       {notice && <div className="alert info span2">{notice}</div>}
 
+      <nav className="tabs span2">
+        <button className={tab === "findings" ? "tab active" : "tab"} onClick={() => setTab("findings")}>
+          Findings
+        </button>
+        <button className={tab === "automation" ? "tab active" : "tab"} onClick={() => setTab("automation")}>
+          Automation
+        </button>
+      </nav>
+
       <section className="card span2">
         <div className="row spread">
           <div>
@@ -59,32 +70,30 @@ export function Dashboard() {
           </div>
           <div className="row gap">
             {conn?.connected ? (
-              <button className="ghost" onClick={disconnect}>
-                Disconnect
-              </button>
+              <button className="ghost" onClick={disconnect}>Disconnect</button>
             ) : (
-              <button className="primary" onClick={connect}>
-                Connect Jira
-              </button>
+              <button className="primary" onClick={connect}>Connect Jira</button>
             )}
             {conn && !conn.connected && conn.status === "needs_reauth" && (
-              <button className="primary" onClick={connect}>
-                Reconnect
-              </button>
+              <button className="primary" onClick={connect}>Reconnect</button>
             )}
           </div>
         </div>
       </section>
 
-      {conn?.connected ? (
-        <TicketsPanel projects={projects} onReconnect={connect} />
+      {tab === "findings" ? (
+        conn?.connected ? (
+          <TicketsPanel projects={projects} onReconnect={connect} />
+        ) : (
+          <section className="card span2 muted">
+            Connect your Jira workspace to start reporting NHI findings.
+          </section>
+        )
       ) : (
-        <section className="card span2 muted">
-          Connect your Jira workspace to start reporting NHI findings.
-        </section>
+        <AutomationPanel projects={projects} hasJira={!!conn?.connected} />
       )}
 
-      <TokensPanel />
+      {tab === "findings" && <TokensPanel />}
     </div>
   );
 }
