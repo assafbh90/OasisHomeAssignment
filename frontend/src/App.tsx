@@ -38,11 +38,16 @@ export function App() {
           <span className="logo">◆</span> IdentityHub
           <span className="tag">NHI Findings</span>
         </div>
-        {identity && (
-          <button className="link" onClick={logout}>
-            Sign out
-          </button>
-        )}
+        <nav className="row gap">
+          <a className="link" href="/swagger/index.html" target="_blank" rel="noreferrer">
+            API docs ↗
+          </a>
+          {identity && (
+            <button className="link" onClick={logout}>
+              Sign out
+            </button>
+          )}
+        </nav>
       </header>
       <main className="container">
         {identity ? <Dashboard /> : <Login onSuccess={setIdentity} />}
