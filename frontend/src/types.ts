@@ -50,6 +50,21 @@ export interface IssuedToken extends ApiToken {
   token: string;
 }
 
+export interface Automation {
+  id: string;
+  name: string;
+  site_url: string;
+  provider: string;
+  project_key: string;
+  interval_seconds: number;
+  enabled: boolean;
+  status: string;
+  next_scan_at: string;
+  last_run_at?: string;
+  last_error?: string;
+  created_at: string;
+}
+
 // ApiError carries the structured error envelope from the backend.
 export class ApiError extends Error {
   status: number;

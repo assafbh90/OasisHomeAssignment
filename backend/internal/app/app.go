@@ -18,6 +18,10 @@ import (
 
 	"github.com/assafbh/identityhub/internal/apitoken"
 	"github.com/assafbh/identityhub/internal/auth"
+	"github.com/assafbh/identityhub/internal/automation"
+	"github.com/assafbh/identityhub/internal/automation/discover"
+	"github.com/assafbh/identityhub/internal/automation/scrape"
+	"github.com/assafbh/identityhub/internal/automation/summarize"
 	"github.com/assafbh/identityhub/internal/config"
 	"github.com/assafbh/identityhub/internal/integration"
 	"github.com/assafbh/identityhub/internal/integration/client"
@@ -35,6 +39,9 @@ import (
 // CmdSeed is the subcommand that seeds demo data instead of serving.
 const CmdSeed = "seed"
 
+// CmdScheduler runs the automation scheduler worker instead of the HTTP server.
+const CmdScheduler = "scheduler"
+
 const (
 	// oauthStateTTL bounds how long a user has to complete the OAuth consent.
 	oauthStateTTL = 10 * time.Minute
@@ -47,13 +54,15 @@ const (
 
 // App holds the fully-wired dependencies shared by the server and subcommands.
 type App struct {
-	cfg     config.Config
-	log     *slog.Logger
-	deps    transport.RouterDeps
-	tenants *store.PostgresTenantRepository
-	users   *store.PostgresUserRepository
-	hasher  *auth.Argon2PasswordHasher
-	closers []func()
+	cfg      config.Config
+	log      *slog.Logger
+	deps     transport.RouterDeps
+	tenants  *store.PostgresTenantRepository
+	users    *store.PostgresUserRepository
+	hasher   *auth.Argon2PasswordHasher
+	autoSvc  *automation.Service
+	autoRepo *store.PostgresAutomationRepository
+	closers  []func()
 }
 
 // Run is the process entrypoint: load config, build the logger, wire everything,
@@ -75,8 +84,13 @@ func Run() error {
 	}
 	defer a.Close()
 
-	if len(os.Args) > 1 && os.Args[1] == CmdSeed {
-		return a.Seed(ctx)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case CmdSeed:
+			return a.Seed(ctx)
+		case CmdScheduler:
+			return a.RunScheduler(ctx)
+		}
 	}
 	return a.Serve(ctx)
 }
@@ -123,6 +137,20 @@ func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 		Client: jiraClient, Cache: redisStores.tickets, Gate: redisStores.reconcile,
 	})
 
+	// Automation (blog digest) subsystem.
+	a.autoRepo = store.NewPostgresAutomationRepository(pool)
+	automationSeen := redisstore.NewRedisAutomationSeenSet(redisClient)
+	a.autoSvc = automation.NewService(automation.Deps{
+		Repo:            a.autoRepo,
+		Disc:            discover.New(cfg.Automation.HTTPTimeout),
+		Scraper:         scrape.New(cfg.Automation.HTTPTimeout),
+		Summ:            summarize.New(cfg.Ollama.BaseURL, cfg.Ollama.Model, cfg.Ollama.Timeout, cfg.Ollama.MaxInputChars),
+		Tickets:         reportSvc,
+		Seen:            automationSeen,
+		MaxPostsPerRun:  cfg.Automation.MaxPostsPerRun,
+		DefaultInterval: cfg.Automation.DefaultInterval,
+	})
+
 	// Transport: identity resolvers (bearer first, then session), then handlers.
 	resolver := transport.NewChainIdentityResolver(
 		transport.NewBearerTokenResolver(tokenIssuer),
@@ -141,6 +169,7 @@ func Wire(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error
 		Tokens:      transport.NewTokenHandler(tokenIssuer),
 		Health:      transport.NewHealthHandler(pool, platform.RedisPinger{Client: redisClient}),
 		Integration: transport.NewIntegrationHandler(connectionSvc, reportSvc, "/"),
+		Automation:  transport.NewAutomationHandler(a.autoSvc),
 	}
 	return a, nil
 }

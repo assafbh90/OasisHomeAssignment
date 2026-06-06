@@ -24,6 +24,7 @@ type RouterDeps struct {
 	Tokens      *TokenHandler
 	Health      *HealthHandler
 	Integration *IntegrationHandler
+	Automation  *AutomationHandler
 }
 
 // NewRouter wires middleware and routes into a gin engine.
@@ -54,9 +55,26 @@ func NewRouter(d RouterDeps) *gin.Engine {
 		if d.Integration != nil {
 			registerIntegrationRoutes(v1, d.Integration)
 		}
+		if d.Automation != nil {
+			registerAutomationRoutes(v1, d.Automation)
+		}
 	}
 
 	return r
+}
+
+// registerAutomationRoutes mounts the automation CRUD endpoints. These are
+// session-driven (UI); unsafe methods are guarded by CSRF + session method.
+func registerAutomationRoutes(v1 *gin.RouterGroup, h *AutomationHandler) {
+	ag := v1.Group("/automations")
+	{
+		ag.GET("", h.List)
+		ag.POST("", RequireSessionMethod(), h.Create)
+		ag.GET("/:id", h.Get)
+		ag.PUT("/:id", RequireSessionMethod(), h.Update)
+		ag.DELETE("/:id", RequireSessionMethod(), h.Delete)
+		ag.POST("/:id/run", RequireSessionMethod(), h.RunNow)
+	}
 }
 
 // registerIntegrationRoutes mounts the Jira integration endpoints. The

@@ -137,3 +137,8 @@ table.tokens tr.revoked { opacity: 0.5; }
 @media (max-width: 720px) {
   .grid { grid-template-columns: 1fr; }
 }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 4px; }
+.tab { background: none; border: none; padding: 8px 14px; cursor: pointer; color: var(--muted, #888); border-bottom: 2px solid transparent; }
+.tab.active { color: inherit; border-bottom-color: currentColor; font-weight: 600; }
+.small { font-size: 0.85em; }

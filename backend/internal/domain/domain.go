@@ -34,6 +34,9 @@ var (
 	ErrProviderNotSupported = errors.New("provider not supported")
 	ErrStateNotFound        = errors.New("oauth state not found or already used")
 
+	// Automation
+	ErrAutomationNotFound = errors.New("automation not found")
+
 	// ErrInvalidGrant is returned by a provider when a refresh token is no longer
 	// valid (e.g. rotated/expired). It drives the connection to needs_reauth.
 	ErrInvalidGrant = errors.New("invalid_grant")

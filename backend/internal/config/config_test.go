@@ -68,3 +68,15 @@ func TestConfig_Helpers(t *testing.T) {
 	require.Equal(t, "postgres://u:p@h:5432/d?sslmode=disable",
 		config.PostgresConfig{User: "u", Password: "p", Host: "h", Port: 5432, DB: "d", SSLMode: "disable"}.DSN())
 }
+
+func TestConfig_AutomationDefaultsPresentInStruct(t *testing.T) {
+	t.Parallel()
+	c := config.Config{
+		Ollama:     config.OllamaConfig{BaseURL: "http://ollama:11434", Model: "qwen2.5:0.5b", Timeout: time.Minute, MaxInputChars: 8000},
+		Scheduler:  config.SchedulerConfig{Tick: 30 * time.Second, ClaimBatch: 5, Lease: 10 * time.Minute},
+		Automation: config.AutomationConfig{MaxPostsPerRun: 5, DefaultInterval: time.Hour, HTTPTimeout: 15 * time.Second},
+	}
+	require.Equal(t, "qwen2.5:0.5b", c.Ollama.Model)
+	require.Equal(t, 5, c.Scheduler.ClaimBatch)
+	require.Equal(t, 5, c.Automation.MaxPostsPerRun)
+}

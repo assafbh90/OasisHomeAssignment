@@ -16,17 +16,20 @@ import (
 
 // Config is the fully-resolved application configuration.
 type Config struct {
-	Env       string          `mapstructure:"env"`
-	HTTP      HTTPConfig      `mapstructure:"http"`
-	Pprof     PprofConfig     `mapstructure:"pprof"`
-	Postgres  PostgresConfig  `mapstructure:"postgres"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Session   SessionConfig   `mapstructure:"session"`
-	Argon2    Argon2Config    `mapstructure:"argon2"`
-	Crypto    CryptoConfig    `mapstructure:"crypto"`
-	APIToken  APITokenConfig  `mapstructure:"api_token"`
-	RateLimit RateLimitConfig `mapstructure:"ratelimit"`
-	Jira      JiraConfig      `mapstructure:"jira"`
+	Env        string           `mapstructure:"env"`
+	HTTP       HTTPConfig       `mapstructure:"http"`
+	Pprof      PprofConfig      `mapstructure:"pprof"`
+	Postgres   PostgresConfig   `mapstructure:"postgres"`
+	Redis      RedisConfig      `mapstructure:"redis"`
+	Session    SessionConfig    `mapstructure:"session"`
+	Argon2     Argon2Config     `mapstructure:"argon2"`
+	Crypto     CryptoConfig     `mapstructure:"crypto"`
+	APIToken   APITokenConfig   `mapstructure:"api_token"`
+	RateLimit  RateLimitConfig  `mapstructure:"ratelimit"`
+	Jira       JiraConfig       `mapstructure:"jira"`
+	Ollama     OllamaConfig     `mapstructure:"ollama"`
+	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
+	Automation AutomationConfig `mapstructure:"automation"`
 }
 
 // HTTPConfig configures the public HTTP server.
@@ -132,6 +135,28 @@ type JiraConfig struct {
 	HTTPTimeout      time.Duration `mapstructure:"http_timeout"`
 }
 
+// OllamaConfig configures the local LLM used to summarize blog posts.
+type OllamaConfig struct {
+	BaseURL       string        `mapstructure:"base_url"`
+	Model         string        `mapstructure:"model"`
+	Timeout       time.Duration `mapstructure:"timeout"`
+	MaxInputChars int           `mapstructure:"max_input_chars"`
+}
+
+// SchedulerConfig configures the automation scheduler worker.
+type SchedulerConfig struct {
+	Tick       time.Duration `mapstructure:"tick"`        // how often to poll for due automations
+	ClaimBatch int           `mapstructure:"claim_batch"` // max automations claimed per tick
+	Lease      time.Duration `mapstructure:"lease"`       // a running row older than this is reclaimable (crash self-heal)
+}
+
+// AutomationConfig configures a single automation run.
+type AutomationConfig struct {
+	MaxPostsPerRun  int           `mapstructure:"max_posts_per_run"` // cap per run; 0 = unlimited
+	DefaultInterval time.Duration `mapstructure:"default_interval"`  // default scan interval for new automations
+	HTTPTimeout     time.Duration `mapstructure:"http_timeout"`      // timeout for sitemap/scrape fetches
+}
+
 // IsProd reports whether the process runs in production mode.
 func (c Config) IsProd() bool { return strings.EqualFold(c.Env, "prod") }
 
@@ -225,6 +250,22 @@ func Load(path string) (Config, error) {
 			InactivityWindow: v.GetDuration(keyJiraInactivityWindow),
 			AccessTokenSkew:  v.GetDuration(keyJiraAccessTokenSkew),
 			HTTPTimeout:      v.GetDuration(keyJiraHTTPTimeout),
+		},
+		Ollama: OllamaConfig{
+			BaseURL:       v.GetString(keyOllamaBaseURL),
+			Model:         v.GetString(keyOllamaModel),
+			Timeout:       v.GetDuration(keyOllamaTimeout),
+			MaxInputChars: v.GetInt(keyOllamaMaxInputChars),
+		},
+		Scheduler: SchedulerConfig{
+			Tick:       v.GetDuration(keySchedulerTick),
+			ClaimBatch: v.GetInt(keySchedulerClaimBatch),
+			Lease:      v.GetDuration(keySchedulerLease),
+		},
+		Automation: AutomationConfig{
+			MaxPostsPerRun:  v.GetInt(keyAutomationMaxPostsPerRun),
+			DefaultInterval: v.GetDuration(keyAutomationDefaultInterval),
+			HTTPTimeout:     v.GetDuration(keyAutomationHTTPTimeout),
 		},
 	}
 	if err := cfg.Validate(); err != nil {
@@ -332,6 +373,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(keyJiraInactivityWindow, "2160h") // 90 days
 	v.SetDefault(keyJiraAccessTokenSkew, "60s")
 	v.SetDefault(keyJiraHTTPTimeout, "10s")
+
+	v.SetDefault(keyOllamaBaseURL, "http://ollama:11434")
+	v.SetDefault(keyOllamaModel, "qwen2.5:0.5b")
+	v.SetDefault(keyOllamaTimeout, "120s")
+	v.SetDefault(keyOllamaMaxInputChars, 8000)
+
+	v.SetDefault(keySchedulerTick, "30s")
+	v.SetDefault(keySchedulerClaimBatch, 5)
+	v.SetDefault(keySchedulerLease, "10m")
+
+	v.SetDefault(keyAutomationMaxPostsPerRun, 5)
+	v.SetDefault(keyAutomationDefaultInterval, "1h")
+	v.SetDefault(keyAutomationHTTPTimeout, "15s")
 }
 
 // Validate enforces required fields and structural invariants.
