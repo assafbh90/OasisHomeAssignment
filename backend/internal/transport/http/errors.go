@@ -58,6 +58,8 @@ func respondError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, errorResponse{Error: errCodeNotConnected, Message: "integration is not connected"})
 	case errors.Is(err, domain.ErrStateNotFound):
 		c.JSON(http.StatusBadRequest, errorResponse{Error: errCodeInvalidState, Message: "invalid or expired authorization state"})
+	case errors.Is(err, domain.ErrAutomationNotFound):
+		c.JSON(http.StatusNotFound, errorResponse{Error: errCodeNotFound, Message: "automation not found"})
 	default:
 		logging.FromContext(c.Request.Context()).Error("unhandled error", logging.Err(err))
 		c.JSON(http.StatusInternalServerError, errorResponse{Error: errCodeInternal, Message: "an unexpected error occurred"})

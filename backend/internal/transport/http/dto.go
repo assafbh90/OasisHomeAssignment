@@ -188,3 +188,67 @@ func timePtr(t *time.Time) *string {
 	s := t.UTC().Format(time.RFC3339)
 	return &s
 }
+
+// ---- automations ----
+
+type automationRequest struct {
+	Name            string `json:"name"`
+	SiteURL         string `json:"site_url"`
+	ProjectKey      string `json:"project_key"`
+	IntervalSeconds int    `json:"interval_seconds"`
+	Enabled         *bool  `json:"enabled"`
+}
+
+const minIntervalSeconds = 60
+
+func (r automationRequest) validate() string {
+	switch {
+	case strings.TrimSpace(r.Name) == "":
+		return "name is required"
+	case !strings.HasPrefix(r.SiteURL, "http://") && !strings.HasPrefix(r.SiteURL, "https://"):
+		return "site_url must be an http(s) URL"
+	case strings.TrimSpace(r.ProjectKey) == "":
+		return "project_key is required"
+	case r.IntervalSeconds != 0 && r.IntervalSeconds < minIntervalSeconds:
+		return "interval_seconds must be at least 60"
+	default:
+		return ""
+	}
+}
+
+type automationResponse struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	SiteURL         string  `json:"site_url"`
+	Provider        string  `json:"provider"`
+	ProjectKey      string  `json:"project_key"`
+	IntervalSeconds int     `json:"interval_seconds"`
+	Enabled         bool    `json:"enabled"`
+	Status          string  `json:"status"`
+	NextScanAt      string  `json:"next_scan_at"`
+	LastRunAt       *string `json:"last_run_at,omitempty"`
+	LastError       string  `json:"last_error,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+}
+
+func toAutomationResponse(a domain.Automation) automationResponse {
+	var lastRun *string
+	if a.LastRunAt != nil {
+		s := a.LastRunAt.UTC().Format(rfc3339)
+		lastRun = &s
+	}
+	return automationResponse{
+		ID:              a.ID.String(),
+		Name:            a.Name,
+		SiteURL:         a.SiteURL,
+		Provider:        a.Provider,
+		ProjectKey:      a.ProjectKey,
+		IntervalSeconds: int(a.Interval.Seconds()),
+		Enabled:         a.Enabled,
+		Status:          string(a.Status),
+		NextScanAt:      a.NextScanAt.UTC().Format(rfc3339),
+		LastRunAt:       lastRun,
+		LastError:       a.LastError,
+		CreatedAt:       a.CreatedAt.UTC().Format(rfc3339),
+	}
+}
