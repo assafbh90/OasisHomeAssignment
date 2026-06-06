@@ -34,6 +34,14 @@ func NewAutomationHandler(svc automationService) *AutomationHandler {
 }
 
 // List returns the tenant's automations.
+//
+// @Summary  List automations (blog-digest watchers)
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Success  200  {object}  map[string][]automationResponse
+// @Router   /v1/automations [get]
 func (h *AutomationHandler) List(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	items, err := h.svc.List(c.Request.Context(), id)
@@ -46,6 +54,17 @@ func (h *AutomationHandler) List(c *gin.Context) {
 }
 
 // Create makes a new automation.
+//
+// @Summary  Create an automation
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Accept   json
+// @Produce  json
+// @Param    automation  body      automationRequest  true  "Automation"
+// @Success  201         {object}  automationResponse
+// @Failure  400         {object}  errorResponse
+// @Router   /v1/automations [post]
 func (h *AutomationHandler) Create(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	var req automationRequest
@@ -76,6 +95,16 @@ func (h *AutomationHandler) Create(c *gin.Context) {
 }
 
 // Get returns one automation.
+//
+// @Summary  Get an automation
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Produce  json
+// @Param    id   path      string  true  "Automation ID"
+// @Success  200  {object}  automationResponse
+// @Failure  404  {object}  errorResponse
+// @Router   /v1/automations/{id} [get]
 func (h *AutomationHandler) Get(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	aid, err := uuid.Parse(c.Param("id"))
@@ -92,6 +121,19 @@ func (h *AutomationHandler) Get(c *gin.Context) {
 }
 
 // Update applies field changes.
+//
+// @Summary  Update an automation (full replacement)
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Accept   json
+// @Produce  json
+// @Param    id          path      string             true  "Automation ID"
+// @Param    automation  body      automationRequest  true  "Automation"
+// @Success  200         {object}  automationResponse
+// @Failure  400         {object}  errorResponse
+// @Failure  404         {object}  errorResponse
+// @Router   /v1/automations/{id} [put]
 func (h *AutomationHandler) Update(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	aid, err := uuid.Parse(c.Param("id"))
@@ -122,6 +164,15 @@ func (h *AutomationHandler) Update(c *gin.Context) {
 }
 
 // Delete removes an automation.
+//
+// @Summary  Delete an automation (and clear its seen-set)
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Param    id   path  string  true  "Automation ID"
+// @Success  204
+// @Failure  404  {object}  errorResponse
+// @Router   /v1/automations/{id} [delete]
 func (h *AutomationHandler) Delete(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	aid, err := uuid.Parse(c.Param("id"))
@@ -137,6 +188,15 @@ func (h *AutomationHandler) Delete(c *gin.Context) {
 }
 
 // RunNow makes an automation due immediately.
+//
+// @Summary  Run an automation now (schedule on the next tick)
+// @Tags     automations
+// @Security CookieAuth
+// @Security BearerAuth
+// @Param    id   path  string  true  "Automation ID"
+// @Success  202
+// @Failure  404  {object}  errorResponse
+// @Router   /v1/automations/{id}/run [post]
 func (h *AutomationHandler) RunNow(c *gin.Context) {
 	id, _ := mustIdentity(c)
 	aid, err := uuid.Parse(c.Param("id"))

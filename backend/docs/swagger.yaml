@@ -1,5 +1,45 @@
 basePath: /
 definitions:
+  http.automationRequest:
+    properties:
+      enabled:
+        type: boolean
+      interval_seconds:
+        type: integer
+      name:
+        type: string
+      project_key:
+        type: string
+      site_url:
+        type: string
+    type: object
+  http.automationResponse:
+    properties:
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      interval_seconds:
+        type: integer
+      last_error:
+        type: string
+      last_run_at:
+        type: string
+      name:
+        type: string
+      next_scan_at:
+        type: string
+      project_key:
+        type: string
+      provider:
+        type: string
+      site_url:
+        type: string
+      status:
+        type: string
+    type: object
   http.connectionResponse:
     properties:
       connected:
@@ -187,6 +227,154 @@ paths:
       summary: Current identity
       tags:
       - auth
+  /v1/automations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              items:
+                $ref: '#/definitions/http.automationResponse'
+              type: array
+            type: object
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: List automations (blog-digest watchers)
+      tags:
+      - automations
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Automation
+        in: body
+        name: automation
+        required: true
+        schema:
+          $ref: '#/definitions/http.automationRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/http.automationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Create an automation
+      tags:
+      - automations
+  /v1/automations/{id}:
+    delete:
+      parameters:
+      - description: Automation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Delete an automation (and clear its seen-set)
+      tags:
+      - automations
+    get:
+      parameters:
+      - description: Automation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.automationResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Get an automation
+      tags:
+      - automations
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Automation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Automation
+        in: body
+        name: automation
+        required: true
+        schema:
+          $ref: '#/definitions/http.automationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/http.automationResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Update an automation (full replacement)
+      tags:
+      - automations
+  /v1/automations/{id}/run:
+    post:
+      parameters:
+      - description: Automation ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "202":
+          description: Accepted
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/http.errorResponse'
+      security:
+      - CookieAuth: []
+      - BearerAuth: []
+      summary: Run an automation now (schedule on the next tick)
+      tags:
+      - automations
   /v1/integrations:
     get:
       produces:
