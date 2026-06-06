@@ -30,6 +30,18 @@ const (
 	KeyMethod     = "method"
 	KeyPath       = "path"
 	KeyAddr       = "addr"
+
+	// Automation pipeline fields (one run = one analytics summary line).
+	KeyProvider     = "provider"
+	KeyAutomationID = "automation_id"
+	KeyPostURL      = "post_url"
+	KeyIssueKey     = "issue_key"
+	KeyDurationMS   = "duration_ms"
+	KeyDiscovered   = "discovered"
+	KeyUnseen       = "unseen"
+	KeyCreated      = "created"
+	KeyFailed       = "failed"
+	KeyBacklog      = "backlog"
 )
 
 // Err returns a standard error attribute. Centralizing this keeps the key

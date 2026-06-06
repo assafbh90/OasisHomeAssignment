@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -134,7 +135,12 @@ type RunResult struct {
 // connection needs reconnecting (the run aborts, leaving the rest unseen).
 // Per-post scrape/summarize/create failures are logged and skipped.
 func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, error) {
-	log := logging.FromContext(ctx)
+	start := s.now()
+	// Run-scoped logger: every line for this run carries the automation id + provider.
+	log := logging.FromContext(ctx).With(
+		slog.String(logging.KeyAutomationID, a.ID.String()),
+		slog.String(logging.KeyProvider, a.Provider),
+	)
 
 	urls, err := s.discoverer.Discover(ctx, a.SiteURL)
 	if err != nil {
@@ -151,36 +157,58 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 		unseen = unseen[:s.maxPostsPerRun]
 		backlog = true
 	}
+	log.Debug("automation scan",
+		slog.Int(logging.KeyDiscovered, len(urls)),
+		slog.Int(logging.KeyUnseen, len(unseen)),
+		slog.Bool(logging.KeyBacklog, backlog))
 
 	principal := domain.Identity{TenantID: a.TenantID, UserID: a.OwnerUserID}
-	created := 0
+	created, failed := 0, 0
+	// summary emits one analytics line per run (created/failed/backlog/duration).
+	summaryLine := func(note string) {
+		log.Info("automation run finished",
+			slog.String("outcome", note),
+			slog.Int(logging.KeyUnseen, len(unseen)),
+			slog.Int(logging.KeyCreated, created),
+			slog.Int(logging.KeyFailed, failed),
+			slog.Bool(logging.KeyBacklog, backlog),
+			slog.Int64(logging.KeyDurationMS, s.now().Sub(start).Milliseconds()))
+	}
+
 	for _, postURL := range unseen {
+		plog := log.With(slog.String(logging.KeyPostURL, postURL))
+
 		// Stop before any scrape/summarize work if the owner's Jira is disconnected
 		// (e.g. mid-run). Unprocessed posts stay unseen, so the run resumes from here
 		// once reconnected — and we never query Ollama for a post we can't file.
 		if s.connection != nil {
 			if err := s.connection.EnsureConnected(ctx, principal); err != nil {
 				if errors.Is(err, domain.ErrReauthRequired) {
+					plog.Info("automation run paused: integration needs reconnect")
+					summaryLine("reauth_required")
 					return RunResult{Created: created, Backlog: backlog}, domain.ErrReauthRequired
 				}
+				summaryLine("connection_error")
 				return RunResult{Created: created, Backlog: backlog}, fmt.Errorf("check connection: %w", err)
 			}
 		}
 
 		title, markdown, err := s.scraper.Scrape(ctx, postURL)
 		if err != nil {
-			log.Warn("scrape post failed", logging.Err(err))
+			failed++
+			plog.Warn("scrape post failed", logging.Err(err))
 			continue
 		}
 		summary, err := s.summarizer.Summarize(ctx, title, markdown)
 		if err != nil {
-			log.Warn("summarize post failed", logging.Err(err))
+			failed++
+			plog.Warn("summarize post failed", logging.Err(err))
 			continue
 		}
 		if summary.Source == "" {
 			summary.Source = sourceFromURL(postURL) // keep the "[source] ..." title shape
 		}
-		_, err = s.tickets.CreateTicket(ctx, principal, domain.TicketPayload{
+		ref, err := s.tickets.CreateTicket(ctx, principal, domain.TicketPayload{
 			ProjectKey:  a.ProjectKey,
 			Title:       composeTitle(summary, title),
 			Description: composeDescription(summary, postURL),
@@ -188,16 +216,21 @@ func (s *Service) RunOnce(ctx context.Context, a domain.Automation) (RunResult, 
 		})
 		if err != nil {
 			if errors.Is(err, domain.ErrReauthRequired) {
+				plog.Info("automation run paused: integration needs reconnect")
+				summaryLine("reauth_required")
 				return RunResult{Created: created, Backlog: backlog}, domain.ErrReauthRequired
 			}
-			log.Warn("create ticket failed", logging.Err(err))
+			failed++
+			plog.Warn("create ticket failed", logging.Err(err))
 			continue
 		}
 		created++
+		plog.Debug("automation filed ticket", slog.String(logging.KeyIssueKey, ref.IssueKey))
 		if err := s.seen.Add(ctx, a.ID, postURL); err != nil {
-			log.Warn("mark seen failed", logging.Err(err))
+			plog.Warn("mark seen failed", logging.Err(err))
 		}
 	}
+	summaryLine("ok")
 	return RunResult{Created: created, Backlog: backlog}, nil
 }
 

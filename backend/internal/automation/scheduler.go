@@ -79,22 +79,31 @@ func (s *Scheduler) RunDue(ctx context.Context) {
 		s.log.Error("claim due automations failed", logging.Err(err))
 		return
 	}
+	if len(claimed) > 0 {
+		s.log.Debug("automation batch claimed", slog.Int("count", len(claimed)))
+	}
 	for _, a := range claimed {
+		alog := s.log.With(slog.String(logging.KeyAutomationID, a.ID.String()))
 		res, runErr := s.svc.RunOnce(ctx, a)
 		msg := ""
 		if runErr != nil {
 			msg = runErr.Error()
-			s.log.Warn("automation run failed", slog.String("automation_id", a.ID.String()), logging.Err(runErr))
+			alog.Warn("automation run failed", logging.Err(runErr))
 		}
 		// Drain a backlog fast (short reschedule); otherwise — caught up, or a hard
 		// failure we should back off from — wait the steady-state interval.
 		interval := a.Interval
-		if runErr == nil && res.Backlog && s.drain > 0 {
+		drained := runErr == nil && res.Backlog && s.drain > 0
+		if drained {
 			interval = s.drain
 		}
 		next := s.now().Add(interval)
 		if err := s.repo.Complete(ctx, a.TenantID, a.ID, next, msg); err != nil {
-			s.log.Error("complete automation failed", slog.String("automation_id", a.ID.String()), logging.Err(err))
+			alog.Error("complete automation failed", logging.Err(err))
+			continue
 		}
+		alog.Debug("automation rescheduled",
+			slog.Bool("draining", drained),
+			slog.Time("next_scan_at", next))
 	}
 }
