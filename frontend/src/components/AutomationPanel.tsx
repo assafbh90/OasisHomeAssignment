@@ -123,24 +123,36 @@ export function AutomationPanel({ projects, hasJira }: { projects: Project[]; ha
       <section className="card span2">
         <h2>Automations</h2>
         {items.length === 0 ? (
-          <p className="muted">No automations yet.</p>
+          <p className="muted">No automations yet. Add one above to watch a blog and file a ticket per new post.</p>
         ) : (
-          <ul className="ticket-list">
+          <ul className="auto-list">
             {items.map((a) => (
-              <li key={a.id}>
-                <div>
-                  <span className="key">{a.project_key}</span>
-                  <span className="title">{a.name}</span>
-                  <span className="muted"> · {a.site_url}</span>
-                  <div className="muted small">
-                    {a.enabled ? "Enabled" : "Disabled"} · every {Math.round(a.interval_seconds / 60)}m · {a.status}
-                    {a.last_error ? ` · ⚠ ${a.last_error}` : ""}
+              <li key={a.id} className="auto-item">
+                <div className="auto-main">
+                  <div className="row gap wrap">
+                    <span className="auto-name">{a.name}</span>
+                    <AutomationStatus a={a} />
+                    <span className="chip">{a.project_key}</span>
                   </div>
+                  <a className="auto-url" href={a.site_url} target="_blank" rel="noreferrer">
+                    {a.site_url} ↗
+                  </a>
+                  <div className="auto-meta muted small">
+                    every {formatInterval(a.interval_seconds)}
+                    {a.last_run_at ? ` · last run ${new Date(a.last_run_at).toLocaleString()}` : " · never run"}
+                  </div>
+                  {a.last_error && <div className="alert error small auto-error">⚠ {a.last_error}</div>}
                 </div>
-                <div className="row gap">
-                  <button className="link small" onClick={() => runNow(a)}>Run now</button>
-                  <button className="link small" onClick={() => toggle(a)}>{a.enabled ? "Disable" : "Enable"}</button>
-                  <button className="link small" onClick={() => remove(a)}>Delete</button>
+                <div className="auto-actions row gap">
+                  <button className="link small" onClick={() => runNow(a)}>
+                    Run now
+                  </button>
+                  <button className="link small" onClick={() => toggle(a)}>
+                    {a.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button className="link small danger" onClick={() => remove(a)}>
+                    Delete
+                  </button>
                 </div>
               </li>
             ))}
@@ -149,4 +161,18 @@ export function AutomationPanel({ projects, hasJira }: { projects: Project[]; ha
       </section>
     </>
   );
+}
+
+// AutomationStatus renders the run state as a coloured badge.
+function AutomationStatus({ a }: { a: Automation }) {
+  if (!a.enabled) return <span className="badge muted">Disabled</span>;
+  if (a.status === "running") return <span className="badge run">Running</span>;
+  return <span className="badge ok">Active</span>;
+}
+
+// formatInterval renders seconds as the largest whole unit (h/m/s).
+function formatInterval(seconds: number): string {
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
